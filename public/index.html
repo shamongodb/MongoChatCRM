@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MongieCRM</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/favicon.png">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="left-rail">
+      <div class="brand rooster-brand" aria-label="Rooster logo">
+        <svg class="rooster-icon" viewBox="0 0 64 64" role="img" aria-hidden="true">
+          <path d="M20 23c0-6 4-10 10-10 1 0 2 .1 2 .3-1.2 1.5-1.8 3-1.8 4.6 0 1.2.4 2.3 1.1 3.4-1.6-.7-3.3-1-5-1-3.8 0-6.8 1-9.3 2.7z" fill="#f43f5e"/>
+          <path d="M39 18c0-3 2.2-5.4 5.2-5.4.7 0 1.3.1 1.8.3-1 1-1.6 2.3-1.6 3.7 0 1.7.8 3.2 2.1 4.2h-5.3c-1.2-.7-2.2-1.7-2.2-2.8z" fill="#fb7185"/>
+          <path d="M12 36c0-9.4 7.6-17 17-17h7.4c4.8 0 9.3 2.1 12.3 5.8l4.6 5.5-5.8 1.7 4.1 4.2-7.8 1.8c-2.5 7-9.3 12-17.4 12-10.3 0-18.4-8.1-18.4-18z" fill="#f8fafc"/>
+          <circle cx="36.5" cy="28.5" r="1.9" fill="#102018"/>
+          <path d="M45.4 30.1l9.2-2.1-5.6 6.5z" fill="#f59e0b"/>
+          <path d="M15.2 44.1c2.5 4.1 6.7 6.8 11.9 6.8 8 0 14.7-5.8 16.1-13.3l7.6-1.8-3.4-3.4 4.9-1.4-4-4.8c-2.7-3.2-6.6-5-10.8-5H30c-8.8 0-16 7.2-16 16 0 2.5.5 4.8 1.2 6.9z" fill="none" stroke="#22a955" stroke-width="2.5" stroke-linejoin="round"/>
+          <path d="M18 46.5c2.6-2 5.4-3.2 8.3-3.2 2.9 0 5.7 1.2 8.2 3.2" fill="none" stroke="#22a955" stroke-width="2.4" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <nav id="navIcons" class="icon-nav">
+        <button class="icon-btn active" data-view="home" title="Home" aria-label="Home">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 11.2L12 4l8 7.2v8.3a.5.5 0 0 1-.5.5h-5.2a.3.3 0 0 1-.3-.3v-4.8a.5.5 0 0 0-.5-.5h-3a.5.5 0 0 0-.5.5v4.8a.3.3 0 0 1-.3.3H4.5a.5.5 0 0 1-.5-.5z"/>
+          </svg>
+        </button>
+        <button class="icon-btn" data-view="tasks" title="Tasks" aria-label="Tasks">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9.5 6.5h9v2h-9zm0 4.5h9v2h-9zm0 4.5h9v2h-9z"/>
+            <path d="M5.5 7.5l1 1 2-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M5.5 12l1 1 2-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="6.5" cy="17" r="1.2"/>
+          </svg>
+        </button>
+        <button class="icon-btn" data-view="workloads" title="Workloads" aria-label="Workloads">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M12 7.2v9.6M9.3 9.5c0-1.2 1.3-2.1 2.7-2.1 1.4 0 2.7.9 2.7 2.1 0 1.3-1.1 1.9-2.7 2.3-1.6.4-2.7 1-2.7 2.3 0 1.2 1.3 2.1 2.7 2.1 1.4 0 2.7-.9 2.7-2.1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button class="icon-btn" data-view="milestones" title="Milestones" aria-label="Milestones">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="4" y="5.2" width="16" height="14" rx="2.2" ry="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M7.5 3.9v2.6M16.5 3.9v2.6M4.9 9h14.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="12" cy="13.2" r="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          </svg>
+        </button>
+        <button class="icon-btn" data-view="accounts" title="Accounts" aria-label="Accounts">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4.5 20h15M6.5 20V6.8L12 4l5.5 2.8V20M9 8.5h1.8m-1.8 3h1.8m-1.8 3h1.8m3.4-6h1.8m-1.8 3h1.8m-1.8 3h1.8M11 20v-3.8h2V20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button class="icon-btn" data-view="contacts" title="Contacts" aria-label="Contacts">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="9" cy="9" r="3"/>
+            <path d="M3.8 18.5a5.2 5.2 0 0 1 10.4 0z"/>
+            <circle cx="16.5" cy="10" r="2.4"/>
+            <path d="M13.8 18.5a4.2 4.2 0 0 1 5.5-3.9 4.2 4.2 0 0 1 .9 3.9z"/>
+          </svg>
+        </button>
+        <button class="icon-btn" data-view="initiatives" title="Initiatives" aria-label="Initiatives">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none">
+            <circle cx="6" cy="7" r="2.2" stroke="currentColor" stroke-width="1.6"/>
+            <circle cx="18" cy="6" r="2.2" stroke="currentColor" stroke-width="1.6"/>
+            <circle cx="15" cy="17" r="2.2" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M7.6 8.2L15.6 5.4M16.4 7.8l-1.2 7.6M9.2 15.4l4.8-5.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </nav>
+
+      <section class="chat-section">
+        <div class="chat-header">
+          <h3>Chat</h3>
+          <button id="newChatBtn" class="small-btn" aria-label="New chat">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4.5 5.5h15v9.2a1.3 1.3 0 0 1-1.3 1.3H10l-4.5 3.5v-3.5H5.8a1.3 1.3 0 0 1-1.3-1.3z"/>
+              <path d="M12 8v5M9.5 10.5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+        <div id="chatSessionList" class="chat-sessions"></div>
+        <div id="chatMessages" class="chat-messages"></div>
+        <div class="chat-input-wrap">
+          <input id="chatInput" type="text" placeholder="Message (⌘⇧1 hold to speak)">
+          <button id="chatSendBtn" aria-label="Send message">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 11.7l15-6.2a.8.8 0 0 1 1.1.9l-2.6 12.3a.8.8 0 0 1-1.4.4l-3.2-4-3.3 2.6a.8.8 0 0 1-1.2-.8l.6-4.2 7-6.6-8.8 5.4-3-.7a.8.8 0 0 1-.2-1.5z"/>
+            </svg>
+          </button>
+        </div>
+        <div id="chatStatus" class="chat-status"></div>
+      </section>
+    </aside>
+
+    <main class="main-content">
+      <header class="main-header">
+        <h1 id="viewTitle">Home</h1>
+        <div id="authControls" class="auth-controls">
+          <div id="authSignedOut" class="auth-signed-out">
+            <button id="googleSignInBtn" class="auth-signin-btn" type="button">Sign in with Google</button>
+          </div>
+          <div id="authSignedIn" class="auth-signed-in" hidden>
+            <span id="authUserEmail" class="auth-user-email"></span>
+            <button id="signOutBtn" class="auth-signout-btn" type="button">Sign out</button>
+          </div>
+        </div>
+      </header>
+      <section id="cardsContainer" class="cards"></section>
+    </main>
+  </div>
+
+  <script src="/config.js"></script>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

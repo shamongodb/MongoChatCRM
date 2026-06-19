@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+    <style>
+      html, body { height: 100%; margin: 0; padding: 0; background-color: #f5f5f5; display: flex; flex-direction: column; }
+      body { padding: 40px; padding-bottom: 24px; box-sizing: border-box; }
+      .app-container { max-width: 1200px; margin: 0 auto; width: 100%; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+      .app-container .columns { flex: 1; min-height: 0; align-items: stretch; }
+      .app-container .column { display: flex; flex-direction: column; min-height: 0; }
+      .pane { background: white; padding: 24px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); flex: 1; display: flex; flex-direction: column; min-height: 0; }
+      .pane-title { font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #666; margin-bottom: 1rem; flex-shrink: 0; }
+      .chat-panel, .workflow-panel { display: none; flex: 1; flex-direction: column; min-height: 0; }
+      .chat-panel.show, .workflow-panel.show { display: flex; }
+      .workflow-panel.show { overflow-y: auto; }
+      #chatMessages { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; background: #fafafa; border-radius: 6px; margin-bottom: 12px; }
+      .msg { margin-bottom: 10px; padding: 8px 12px; border-radius: 8px; max-width: 85%; }
+      .msg.user { margin-left: auto; background: #3273dc; color: white; }
+      .msg.assistant { background: #e8e8e8; }
+      .msg.assistant .msg-content { white-space: pre-wrap; word-wrap: break-word; }
+      .msg.assistant .msg-content code { background: rgba(0,0,0,0.08); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+      .msg.assistant .msg-content strong { font-weight: 600; }
+      .msg.assistant .msg-content ul, .msg.assistant .msg-content ol { margin: 0.5em 0; padding-left: 1.5em; }
+      .msg.assistant .msg-content li { margin: 0.25em 0; }
+      .msg.assistant .msg-content p { margin: 0.5em 0; }
+      .msg.assistant .msg-content p:first-child { margin-top: 0; }
+      .msg.assistant .msg-content p:last-child { margin-bottom: 0; }
+      .chat-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-shrink: 0; }
+      .chat-actions input { flex: 1; }
+      .final-link { margin-top: 8px; }
+      .final-link a { font-weight: bold; }
+      .tool-option { cursor: pointer; padding: 1rem; border: 2px solid #e0e0e0; border-radius: 8px; margin-bottom: 10px; transition: border-color 0.15s, background 0.15s; }
+      .tool-option:hover { border-color: #3273dc; background: #f9f9f9; }
+      .tool-option.active { border-color: #3273dc; background: #f0f4ff; }
+      .tool-option h4 { margin: 0 0 4px 0; font-size: 1rem; }
+      .tool-option p { margin: 0; font-size: 0.85rem; color: #666; }
+    </style>
+  </head>
+  <body>
+    <div class="app-container">
+      <h1 class="title is-4 mb-4">MongoDB Sales Orchestrator</h1>
+
+      <div class="columns is-variable is-5">
+        <!-- Left column: Activity pane -->
+        <div class="column is-8">
+          <div class="pane">
+            <div class="pane-title">Activity pane</div>
+            <div id="chatPanel" class="chat-panel show">
+              <div id="chatMessages"></div>
+              <div class="chat-actions">
+                <input class="input" type="text" id="chatInput" placeholder="Type a message..." onkeydown="if(event.key==='Enter') sendChat();">
+                <button class="button is-link" onclick="sendChat()" id="chatSendBtn">Send</button>
+                <button class="button is-light is-small" onclick="newChat()">New chat</button>
+              </div>
+              <div id="chatStatus" class="mt-2 is-size-7"></div>
+            </div>
+
+            <div id="workflowPanel" class="workflow-panel">
+              <div class="field">
+                <label class="label">Select Notes Document (Google Doc)</label>
+                <div class="control">
+                  <input class="input" type="text" id="docUrl" placeholder="Paste Google Doc URL or ID here">
+                </div>
+              </div>
+              <div class="field">
+                <label class="label">Additional Context/Instructions</label>
+                <div class="control">
+                  <textarea class="textarea" id="extraPrompt" placeholder="e.g. Focus on the security aspects and set a 6-month timeline."></textarea>
+                </div>
+              </div>
+              <div class="control">
+                <button class="button is-link is-fullwidth" onclick="generate()" id="submitBtn">Generate Presentation</button>
+              </div>
+              <div id="status" class="mt-4"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right column: Tools -->
+        <div class="column is-4">
+          <div class="pane">
+            <div class="pane-title">Tools</div>
+            <p class="is-size-7 has-text-grey mb-3">Choose a tool or use Chat to let the agent pick for you.</p>
+            <div class="tool-option active" id="toolChat" onclick="selectTool('chat')">
+              <h4>Chat with MCP</h4>
+              <p>Natural-language chat; agent can invoke tools and ask follow-ups.</p>
+            </div>
+            <div class="tool-option" id="toolWorkloadDeck" onclick="selectTool('workflow')">
+              <h4>Workload Deck Generator</h4>
+              <p>Generate a presentation from a notes document (Google Doc).</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      var chatMessages = [];
+
+      function showMode(mode) {
+        document.getElementById('chatPanel').classList.toggle('show', mode === 'chat');
+        document.getElementById('workflowPanel').classList.toggle('show', mode === 'workflow');
+        document.getElementById('toolChat').classList.toggle('active', mode === 'chat');
+        document.getElementById('toolWorkloadDeck').classList.toggle('active', mode === 'workflow');
+      }
+
+      function selectTool(tool) {
+        showMode(tool);
+      }
+
+      function newChat() {
+        chatMessages = [];
+        var el = document.getElementById('chatMessages');
+        el.innerHTML = '';
+        document.getElementById('chatStatus').textContent = '';
+      }
+
+      function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      }
+
+      function formatAssistantMessage(text) {
+        if (!text) return '';
+        var escaped = escapeHtml(text);
+        escaped = escaped.replace(/\n/g, '<br>');
+        escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        escaped = escaped.replace(/`([^`]+)`/g, '<code>$1</code>');
+        return escaped;
+      }
+
+      function appendMessage(role, content, finalResult) {
+        var el = document.getElementById('chatMessages');
+        var div = document.createElement('div');
+        div.className = 'msg ' + role;
+        if (role === 'assistant') {
+          var inner = document.createElement('div');
+          inner.className = 'msg-content';
+          inner.innerHTML = formatAssistantMessage(content);
+          div.appendChild(inner);
+        } else {
+          div.textContent = content;
+        }
+        el.appendChild(div);
+        if (finalResult && finalResult.url) {
+          var linkDiv = document.createElement('div');
+          linkDiv.className = 'msg assistant final-link';
+          linkDiv.innerHTML = 'Presentation created: <a href="' + finalResult.url + '" target="_blank">Open Presentation</a>';
+          el.appendChild(linkDiv);
+        }
+        el.scrollTop = el.scrollHeight;
+      }
+
+      function sendChat() {
+        var input = document.getElementById('chatInput');
+        var text = (input.value || '').trim();
+        if (!text) return;
+
+        input.value = '';
+        chatMessages.push({ role: 'user', content: text });
+        appendMessage('user', text);
+
+        var statusEl = document.getElementById('chatStatus');
+        var sendBtn = document.getElementById('chatSendBtn');
+        statusEl.textContent = 'Agent is thinking...';
+        sendBtn.classList.add('is-loading');
+        sendBtn.disabled = true;
+
+        google.script.run
+          .withSuccessHandler(function(res) {
+            sendBtn.classList.remove('is-loading');
+            sendBtn.disabled = false;
+            statusEl.textContent = '';
+            chatMessages.push({ role: 'assistant', content: res.reply });
+            appendMessage('assistant', res.reply, res.finalResult);
+          })
+          .withFailureHandler(function(err) {
+            sendBtn.classList.remove('is-loading');
+            sendBtn.disabled = false;
+            statusEl.textContent = '';
+            chatMessages.push({ role: 'assistant', content: 'Error: ' + err.message });
+            appendMessage('assistant', 'Error: ' + err.message);
+          })
+          .chatWithMCP(chatMessages);
+      }
+
+      function generate() {
+        var btn = document.getElementById('submitBtn');
+        var status = document.getElementById('status');
+        var docUrl = document.getElementById('docUrl').value;
+        var extraPrompt = document.getElementById('extraPrompt').value;
+
+        btn.classList.add('is-loading');
+        status.innerHTML = 'Agent is thinking... this may take 30 seconds.';
+
+        google.script.run
+          .withSuccessHandler(function(res) {
+            btn.classList.remove('is-loading');
+            status.innerHTML = '<div class="notification is-success"><b>Success!</b> <a href="' + res.url + '" target="_blank">Open Presentation</a></div>';
+          })
+          .withFailureHandler(function(err) {
+            btn.classList.remove('is-loading');
+            status.innerHTML = '<div class="notification is-danger">' + err + '</div>';
+          })
+          .processForm(docUrl, extraPrompt);
+      }
+    </script>
+  </body>
+</html>

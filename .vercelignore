@@ -1,0 +1,12 @@
+node_modules
+**/node_modules
+.git
+.cursor
+agent-transcripts
+chrome-extension
+appsscript-backend
+Code.js
+PROJECT.md
+server/test
+server/scripts
+*.log
