@@ -98,6 +98,10 @@ app.use('/api', async (req, res) => {
 
 app.use(express.static('public'));
 
+app.get('/login', (_req, res) => {
+  res.sendFile(new URL('../public/login.html', import.meta.url).pathname);
+});
+
 app.get('*', (_req, res) => {
   res.sendFile(new URL('../public/index.html', import.meta.url).pathname);
 });

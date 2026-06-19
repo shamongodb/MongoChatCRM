@@ -33,6 +33,18 @@
       "destination": "/favicon.png"
     },
     {
+      "source": "/auth.js",
+      "destination": "/auth.js"
+    },
+    {
+      "source": "/login.js",
+      "destination": "/login.js"
+    },
+    {
+      "source": "/login",
+      "destination": "/login.html"
+    },
+    {
       "source": "/",
       "destination": "/index.html"
     },

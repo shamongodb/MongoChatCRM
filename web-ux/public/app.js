@@ -1,11 +1,15 @@
+import {
+  authHeaders as buildAuthHeaders,
+  clearAuthState,
+  getAuthState,
+  isAuthenticated,
+  loadStoredAuthState
+} from './auth.js';
+
 const config = window.__WEB_UX_CONFIG__ || {};
 
 const state = {
   apiBaseUrl: String(config.apiBaseUrl || '').trim().replace(/\/+$/, ''),
-  googleClientId: String(config.googleClientId || '').trim(),
-  authToken: null,
-  authUser: null,
-  userId: null,
   currentView: 'home',
   currentConversationId: null,
   chatMessages: [],
@@ -105,11 +109,9 @@ const chatInputEl = document.getElementById('chatInput');
 const chatSendBtnEl = document.getElementById('chatSendBtn');
 const chatStatusEl = document.getElementById('chatStatus');
 const newChatBtnEl = document.getElementById('newChatBtn');
-const authSignedOutEl = document.getElementById('authSignedOut');
 const authSignedInEl = document.getElementById('authSignedIn');
 const authUserEmailEl = document.getElementById('authUserEmail');
 const signOutBtnEl = document.getElementById('signOutBtn');
-const googleSignInBtnEl = document.getElementById('googleSignInBtn');
 
 function setStatus(text) {
   chatStatusEl.textContent = text || '';
@@ -120,164 +122,23 @@ function makeId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function loadStoredAuthState() {
-  const token = localStorage.getItem('webUxAuthToken');
-  const userRaw = localStorage.getItem('webUxAuthUser');
-  state.authToken = token && String(token).trim() ? String(token).trim() : null;
-  if (userRaw) {
-    try {
-      state.authUser = JSON.parse(userRaw);
-    } catch (_err) {
-      state.authUser = null;
-    }
-  } else {
-    state.authUser = null;
-  }
-  state.userId = state.authUser?.userId ? String(state.authUser.userId).trim() : null;
-}
-
-function persistAuthState(token, user) {
-  state.authToken = token && String(token).trim() ? String(token).trim() : null;
-  state.authUser = user && typeof user === 'object' ? user : null;
-  state.userId = state.authUser?.userId ? String(state.authUser.userId).trim() : null;
-  if (state.authToken) {
-    localStorage.setItem('webUxAuthToken', state.authToken);
-  } else {
-    localStorage.removeItem('webUxAuthToken');
-  }
-  if (state.authUser) {
-    localStorage.setItem('webUxAuthUser', JSON.stringify(state.authUser));
-  } else {
-    localStorage.removeItem('webUxAuthUser');
-  }
-}
-
-function clearAuthState() {
-  persistAuthState(null, null);
-  state.currentConversationId = null;
-  state.chatMessages = [];
-  state.chatSessions = [];
-  localStorage.removeItem('webUxConversationId');
-}
-
 function ensureSignedIn() {
-  if (!state.authToken || !state.userId) {
+  if (!isAuthenticated()) {
     throw new Error('Sign in with Google to continue.');
   }
 }
 
 function authHeaders(extraHeaders = {}) {
-  ensureSignedIn();
-  return {
-    ...extraHeaders,
-    Authorization: `Bearer ${state.authToken}`
-  };
+  return buildAuthHeaders(extraHeaders);
 }
 
 function updateAuthUi() {
-  const signedIn = Boolean(state.authToken && state.userId);
-  if (authSignedOutEl) authSignedOutEl.hidden = signedIn;
+  const authState = getAuthState();
+  const signedIn = Boolean(authState.authToken && authState.userId);
   if (authSignedInEl) authSignedInEl.hidden = !signedIn;
   if (authUserEmailEl) {
-    authUserEmailEl.textContent = signedIn ? String(state.authUser?.email || state.userId || '') : '';
+    authUserEmailEl.textContent = signedIn ? String(authState.authUser?.email || authState.userId || '') : '';
   }
-}
-
-async function exchangeGoogleIdToken(idToken) {
-  const out = await apiPost('/api/auth/google/exchange', { idToken }, { skipAuth: true });
-  if (!out || !out.token || !out.user) {
-    throw new Error('Auth exchange response is missing required fields.');
-  }
-  persistAuthState(out.token, out.user);
-  updateAuthUi();
-}
-
-function parseIdTokenFromOAuthRedirect(urlLike) {
-  const raw = String(urlLike || '');
-  const hash = raw.includes('#') ? raw.slice(raw.indexOf('#') + 1) : '';
-  const params = new URLSearchParams(hash);
-  return params.get('id_token') ? String(params.get('id_token')).trim() : '';
-}
-
-async function signInWithGoogleAccountPicker() {
-  const clientId = String(state.googleClientId || '').trim();
-  if (!clientId) throw new Error('Google Sign-In is not configured (missing GOOGLE_CLIENT_ID).');
-
-  const redirectUri = window.location.origin;
-  const nonce = makeId('nonce');
-  const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-  authUrl.searchParams.set('client_id', clientId);
-  authUrl.searchParams.set('response_type', 'id_token');
-  authUrl.searchParams.set('redirect_uri', redirectUri);
-  authUrl.searchParams.set('scope', 'openid email profile');
-  authUrl.searchParams.set('nonce', nonce);
-  authUrl.searchParams.set('prompt', 'select_account');
-
-  const width = 520;
-  const height = 640;
-  const left = Math.max(0, window.screenX + (window.outerWidth - width) / 2);
-  const top = Math.max(0, window.screenY + (window.outerHeight - height) / 2);
-  const popup = window.open(
-    authUrl.toString(),
-    'googleSignIn',
-    `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
-  );
-  if (!popup) throw new Error('Popup blocked. Allow popups for this site and try again.');
-
-  const idToken = await new Promise((resolve, reject) => {
-    const startedAt = Date.now();
-    const timer = window.setInterval(() => {
-      if (Date.now() - startedAt > 120000) {
-        window.clearInterval(timer);
-        try { popup.close(); } catch (_err) { /* ignore */ }
-        reject(new Error('Google sign-in timed out.'));
-        return;
-      }
-      if (popup.closed) {
-        window.clearInterval(timer);
-        reject(new Error('Google sign-in was canceled.'));
-        return;
-      }
-      let href = '';
-      try {
-        href = String(popup.location.href || '');
-      } catch (_err) {
-        return;
-      }
-      if (!href.startsWith(redirectUri)) return;
-      const token = parseIdTokenFromOAuthRedirect(href);
-      window.clearInterval(timer);
-      popup.close();
-      if (!token) {
-        reject(new Error('Google sign-in did not return an ID token.'));
-        return;
-      }
-      resolve(token);
-    }, 250);
-  });
-
-  await exchangeGoogleIdToken(idToken);
-  await loadChatSessions();
-  if (state.currentConversationId) {
-    await loadConversationMessages(state.currentConversationId);
-  } else {
-    renderChatMessages();
-  }
-}
-
-async function handleGoogleSignInClick() {
-  try {
-    setStatus('Opening Google account picker...');
-    await signInWithGoogleAccountPicker();
-    setStatus('');
-  } catch (err) {
-    setStatus(`Authentication failed: ${err.message || String(err)}`);
-  }
-}
-
-function bindGoogleSignInButton() {
-  if (!googleSignInBtnEl) return;
-  googleSignInBtnEl.addEventListener('click', handleGoogleSignInClick);
 }
 
 function loadTaskListFilterState() {
@@ -3161,10 +3022,12 @@ newChatBtnEl.addEventListener('click', newChat);
 if (signOutBtnEl) {
   signOutBtnEl.addEventListener('click', () => {
     clearAuthState();
-    updateAuthUi();
+    state.currentConversationId = null;
+    state.chatMessages = [];
+    state.chatSessions = [];
     renderChatMessages();
     setChatSessions([]);
-    setStatus('Signed out');
+    window.location.replace('/login');
   });
 }
 
@@ -3180,24 +3043,28 @@ window.addEventListener('blur', () => {
   stopVoiceCaptureAndSend();
 });
 
+function hasPendingOAuthRedirectHash() {
+  const hash = window.location.hash?.startsWith('#') ? window.location.hash.slice(1) : '';
+  if (!hash) return false;
+  const params = new URLSearchParams(hash);
+  return params.has('id_token') || params.has('error');
+}
+
 (async function init() {
   try {
     loadStoredAuthState();
+    if (!isAuthenticated() && !hasPendingOAuthRedirectHash()) {
+      window.location.replace('/login');
+      return;
+    }
     updateAuthUi();
-    bindGoogleSignInButton();
     loadTaskListFilterState();
     await renderView('home');
-    if (state.authToken && state.userId) {
-      await loadChatSessions();
-      if (state.currentConversationId) {
-        await loadConversationMessages(state.currentConversationId);
-      } else {
-        renderChatMessages();
-      }
+    await loadChatSessions();
+    if (state.currentConversationId) {
+      await loadConversationMessages(state.currentConversationId);
     } else {
-      setChatSessions([]);
       renderChatMessages();
-      setStatus('Sign in with Google to start chatting.');
     }
   } catch (err) {
     setCardsFromHtml(cardHtml('Initialization Error', escapeHtml(err.message || String(err)), 'Check NODE_API_BASE_URL'));

@@ -88,7 +88,8 @@ If API and UI are deployed in the same Vercel project, leave `NODE_API_BASE_URL`
 
 ### 3) External service requirements
 
-- Add your Vercel domain to Google OAuth authorized JavaScript origins for `GOOGLE_CLIENT_ID`.
+- Add your Vercel domain to Google OAuth **authorized JavaScript origins** for `GOOGLE_CLIENT_ID`.
+- Add `https://<your-domain>/login` (and `http://localhost:<port>/login` for local dev) to **authorized redirect URIs**.
 - Allow Vercel egress in MongoDB Atlas network access.
 - Keep API keys and secrets only in Vercel environment variables.
 
