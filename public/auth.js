@@ -9,6 +9,24 @@ const authState = {
   userId: null
 };
 
+function decodeJwtPayload(token) {
+  try {
+    const parts = String(token || '').split('.');
+    if (parts.length !== 3) return null;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    return JSON.parse(atob(padded));
+  } catch (_err) {
+    return null;
+  }
+}
+
+export function isAuthTokenExpired(token = authState.authToken, skewSeconds = 30) {
+  const payload = decodeJwtPayload(token);
+  if (!payload?.exp) return false;
+  return Date.now() / 1000 >= Number(payload.exp) - skewSeconds;
+}
+
 export function loadStoredAuthState() {
   const token = localStorage.getItem('webUxAuthToken');
   const userRaw = localStorage.getItem('webUxAuthUser');
@@ -23,6 +41,13 @@ export function loadStoredAuthState() {
     authState.authUser = null;
   }
   authState.userId = authState.authUser?.userId ? String(authState.authUser.userId).trim() : null;
+  if (authState.authToken && isAuthTokenExpired(authState.authToken)) {
+    authState.authToken = null;
+    authState.authUser = null;
+    authState.userId = null;
+    localStorage.removeItem('webUxAuthToken');
+    localStorage.removeItem('webUxAuthUser');
+  }
   return getAuthState();
 }
 
@@ -35,7 +60,9 @@ export function getAuthState() {
 }
 
 export function isAuthenticated() {
-  return Boolean(authState.authToken && authState.userId);
+  if (!authState.authToken || !authState.userId) return false;
+  if (isAuthTokenExpired(authState.authToken)) return false;
+  return true;
 }
 
 export function persistAuthState(token, user) {
@@ -179,7 +206,21 @@ export function getAuthTokenOrThrow() {
   if (!authState.authToken || !authState.userId) {
     throw new Error('Sign in with Google to continue.');
   }
+  if (isAuthTokenExpired(authState.authToken)) {
+    clearAuthState();
+    throw new Error('Your session expired. Please sign in again.');
+  }
   return authState.authToken;
+}
+
+export function buildAuthFailureMessage(res, data) {
+  if (Number(res?.status) !== 401) return null;
+  const detail = String(data?.details?.message || '').toLowerCase();
+  if (detail.includes('expired')) return 'Your session expired. Please sign in again.';
+  if (detail.includes('invalid signature') || detail.includes('malformed')) {
+    return 'Your session is invalid. Please sign in again.';
+  }
+  return 'Please sign in again to continue.';
 }
 
 export function authHeaders(extraHeaders = {}) {

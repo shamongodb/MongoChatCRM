@@ -1,5 +1,6 @@
 import {
   authHeaders as buildAuthHeaders,
+  buildAuthFailureMessage,
   clearAuthState,
   getAuthState,
   isAuthenticated,
@@ -173,6 +174,17 @@ function ensureSignedIn() {
   if (!isAuthenticated()) {
     throw new Error('Sign in with Google to continue.');
   }
+}
+
+function throwIfApiError(res, data) {
+  if (res.ok && data.ok !== false) return;
+  const authMsg = buildAuthFailureMessage(res, data);
+  if (authMsg) {
+    clearAuthState();
+    updateAuthUi();
+    throw new Error(authMsg);
+  }
+  throw new Error(data.error || `HTTP ${res.status}`);
 }
 
 function authHeaders(extraHeaders = {}) {
@@ -1244,9 +1256,7 @@ async function apiGet(pathname, options = {}) {
   } catch (_err) {
     throw new Error('Server returned non-JSON response.');
   }
-  if (!res.ok || data.ok === false) {
-    throw new Error(data.error || `HTTP ${res.status}`);
-  }
+  throwIfApiError(res, data);
   return data;
 }
 
@@ -1263,9 +1273,7 @@ async function apiPost(pathname, body, options = {}) {
   } catch (_err) {
     throw new Error('Server returned non-JSON response.');
   }
-  if (!res.ok || data.ok === false) {
-    throw new Error(data.error || `HTTP ${res.status}`);
-  }
+  throwIfApiError(res, data);
   return data;
 }
 
@@ -1282,9 +1290,7 @@ async function apiDelete(pathname, options = {}) {
   } catch (_err) {
     throw new Error('Server returned non-JSON response.');
   }
-  if (!res.ok || data.ok === false) {
-    throw new Error(data.error || `HTTP ${res.status}`);
-  }
+  throwIfApiError(res, data);
   return data;
 }
 
@@ -1340,9 +1346,7 @@ async function transcribeVoiceBlob(blob) {
   } catch (_err) {
     throw new Error('Server returned non-JSON response.');
   }
-  if (!res.ok || data.ok === false) {
-    throw new Error(data.error || `HTTP ${res.status}`);
-  }
+  throwIfApiError(res, data);
   return String(data.text || '').trim();
 }
 
@@ -1362,12 +1366,13 @@ async function playAssistantTts(text, options = {}) {
   });
   if (!res.ok) {
     const raw = await res.text();
-    let msg = raw;
+    let data = {};
     try {
-      const j = JSON.parse(raw);
-      if (j && j.error) msg = j.error;
-    } catch (_e) {}
-    throw new Error(msg || `HTTP ${res.status}`);
+      data = raw ? JSON.parse(raw) : {};
+    } catch (_e) {
+      throw new Error(raw || `HTTP ${res.status}`);
+    }
+    throwIfApiError(res, data);
   }
   const blob = await res.blob();
   const objUrl = URL.createObjectURL(blob);
@@ -1385,6 +1390,12 @@ async function playAssistantTts(text, options = {}) {
 
 async function startVoiceCapture() {
   if (voicePttRecording) return;
+  try {
+    ensureSignedIn();
+  } catch (err) {
+    setStatus(err.message || 'Sign in with Google to continue.');
+    return;
+  }
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
     setStatus('Voice input is not supported in this browser.');
     return;
