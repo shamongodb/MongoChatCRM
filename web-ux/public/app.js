@@ -2920,14 +2920,10 @@ async function ensureProfileFromGateResponse(gateResponse) {
 async function sendChatMessage(overrideText) {
   const expectVoiceTts = state.voiceTurnExpectTts;
   state.voiceTurnExpectTts = false;
-  const outgoing = parseOutgoingChatText(
-    (
-    overrideText !== undefined && overrideText !== null
-      ? String(overrideText)
-      : String(chatInputEl.value || '')
-    ),
-    { expectVoiceTts }
-  );
+  const sourceText = typeof overrideText === 'string'
+    ? overrideText
+    : String(chatInputEl.value || '');
+  const outgoing = parseOutgoingChatText(sourceText, { expectVoiceTts });
   const text = outgoing.text;
   if (!text) return;
   ensureSignedIn();
@@ -3132,7 +3128,7 @@ cardsContainerEl.addEventListener('click', (event) => {
   onCardsClick(event);
 });
 
-chatSendBtnEl.addEventListener('click', sendChatMessage);
+chatSendBtnEl.addEventListener('click', () => sendChatMessage());
 chatInputEl.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') sendChatMessage();
 });
