@@ -401,11 +401,12 @@ function extractBearerToken(req) {
 }
 
 function hasValidNodeApiKey(req) {
-  if (!shouldRequireNodeApiKey || !NODE_API_KEY) return false;
+  const apiKey = String(NODE_API_KEY || '').trim();
+  if (!apiKey) return false;
   const token = extractBearerToken(req);
-  if (token && token === NODE_API_KEY) return true;
+  if (token && token === apiKey) return true;
   const bodyKey = (req.body && req.body.apiKey) ? String(req.body.apiKey).trim() : '';
-  if (bodyKey && bodyKey === NODE_API_KEY) return true;
+  if (bodyKey && bodyKey === apiKey) return true;
   return false;
 }
 
@@ -5444,7 +5445,7 @@ function formatElevenLabsErrorMessage(data, rawText) {
 
 app.post(
   '/api/voice/transcribe',
-  requireApiAuth,
+  requireEndUserAuth,
   voiceUpload.single('file'),
   async (req, res) => {
     try {
@@ -5502,7 +5503,7 @@ app.post(
   }
 );
 
-app.post('/api/voice/speak', requireApiAuth, async (req, res) => {
+app.post('/api/voice/speak', requireEndUserAuth, async (req, res) => {
   try {
     const elevenKey = String(ELEVENLABS_API_KEY || '').trim();
     if (!elevenKey) {
