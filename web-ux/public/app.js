@@ -1366,12 +1366,13 @@ async function playAssistantTts(text, options = {}) {
   });
   if (!res.ok) {
     const raw = await res.text();
-    let msg = raw;
+    let data = {};
     try {
-      const j = JSON.parse(raw);
-      if (j && j.error) msg = j.error;
-    } catch (_e) {}
-    throw new Error(msg || `HTTP ${res.status}`);
+      data = raw ? JSON.parse(raw) : {};
+    } catch (_e) {
+      throw new Error(raw || `HTTP ${res.status}`);
+    }
+    throwIfApiError(res, data);
   }
   const blob = await res.blob();
   const objUrl = URL.createObjectURL(blob);
