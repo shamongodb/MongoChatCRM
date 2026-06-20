@@ -8,6 +8,11 @@ const mongoDbName = String(process.env.MONGO_DB_NAME || 'sales_data').trim();
 const accountsCollectionName = String(process.env.MONGO_ACCOUNTS_COLLECTION || 'accounts').trim();
 const contactsCollectionName = String(process.env.MONGO_CONTACTS_COLLECTION || 'contacts').trim();
 const workloadsCollectionName = String(process.env.MONGO_WORKLOADS_COLLECTION || 'Workloads').trim();
+const TEST_USER_ID = 'google_test_crm_resolution';
+
+function runCrmTool(name, args) {
+  return runMongoTool(name, args, { userId: TEST_USER_ID, initiatedByUserId: TEST_USER_ID });
+}
 
 if (!mongoUri) {
   test('crm resolution tests skipped without mongo', { skip: true }, () => {});
@@ -40,12 +45,13 @@ if (!mongoUri) {
 
     try {
       await accounts.insertMany([
-        { _id: accountAId, name: `Lumen A ${runId}`, createdAt: nowIso, updatedAt: nowIso },
-        { _id: accountBId, name: `Lumen B ${runId}`, createdAt: nowIso, updatedAt: nowIso }
+        { _id: accountAId, name: `Lumen A ${runId}`, ownerUserId: TEST_USER_ID, createdAt: nowIso, updatedAt: nowIso },
+        { _id: accountBId, name: `Lumen B ${runId}`, ownerUserId: TEST_USER_ID, createdAt: nowIso, updatedAt: nowIso }
       ]);
       await contacts.insertOne({
         _id: contactId,
         name: `Beth Gunn ${runId}`,
+        ownerUserId: TEST_USER_ID,
         accountId: String(accountAId),
         accountName: `Lumen A ${runId}`,
         notes: [],
@@ -57,6 +63,7 @@ if (!mongoUri) {
         {
           _id: workloadAId,
           name: scopedName,
+          ownerUserId: TEST_USER_ID,
           accountId: String(accountAId),
           accountName: `Lumen A ${runId}`,
           contactIds: [String(contactId)],
@@ -67,6 +74,7 @@ if (!mongoUri) {
         {
           _id: workloadBId,
           name: scopedName,
+          ownerUserId: TEST_USER_ID,
           accountId: String(accountBId),
           accountName: `Lumen B ${runId}`,
           contactIds: [],
@@ -76,7 +84,7 @@ if (!mongoUri) {
         }
       ]);
 
-      const scopedUpdate = await runMongoTool('updateWorkload', {
+      const scopedUpdate = await runCrmTool('updateWorkload', {
         workloadName: scopedName,
         accountId: String(accountAId),
         notes: `updated ${runId}`
@@ -119,12 +127,14 @@ if (!mongoUri) {
       await accounts.insertOne({
         _id: accountId,
         name: `Lumen ${runId}`,
+        ownerUserId: TEST_USER_ID,
         createdAt: nowIso,
         updatedAt: nowIso
       });
       await contacts.insertOne({
         _id: contactId,
         name: `Sharon Modiz ${runId}`,
+        ownerUserId: TEST_USER_ID,
         accountId: String(accountId),
         accountName: `Lumen ${runId}`,
         notes: [],
@@ -133,7 +143,7 @@ if (!mongoUri) {
         updatedAt: nowIso
       });
 
-      const result = await runMongoTool('addWorkload', {
+      const result = await runCrmTool('addWorkload', {
         name: `PS - GLM Migration ${runId}`,
         accountId: String(accountId),
         contactIds: [String(contactId), invalidContactId],
@@ -179,12 +189,14 @@ if (!mongoUri) {
       await accounts.insertOne({
         _id: accountId,
         name: `Acme ${runId}`,
+        ownerUserId: TEST_USER_ID,
         createdAt: nowIso,
         updatedAt: nowIso
       });
       await contacts.insertOne({
         _id: contactId,
         name: contactName,
+        ownerUserId: TEST_USER_ID,
         accountId: String(accountId),
         accountName: `Acme ${runId}`,
         notes: [],
@@ -195,6 +207,7 @@ if (!mongoUri) {
       await workloads.insertOne({
         _id: workloadId,
         name: `WL ${runId}`,
+        ownerUserId: TEST_USER_ID,
         accountId: String(accountId),
         accountName: `Acme ${runId}`,
         contactIds: [String(contactId)],
@@ -203,14 +216,14 @@ if (!mongoUri) {
         updatedAt: nowIso
       });
 
-      const withoutConfirm = await runMongoTool('deleteContact', {
+      const withoutConfirm = await runCrmTool('deleteContact', {
         contactId: String(contactId),
         confirm: false
       });
       assert.ok(withoutConfirm.error);
       assert.match(withoutConfirm.error, /Confirmation required/i);
 
-      const deleted = await runMongoTool('deleteContact', {
+      const deleted = await runCrmTool('deleteContact', {
         contactId: String(contactId),
         confirm: true
       });

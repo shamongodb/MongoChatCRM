@@ -49,6 +49,9 @@ export async function ensureMemoryCollections(db, cfg) {
 
 function sanitizeProfileDoc(doc) {
   if (!doc || typeof doc !== 'object') return null;
+  const crmShareAllWith = Array.isArray(doc.crmShareAllWith)
+    ? Array.from(new Set(doc.crmShareAllWith.map((item) => String(item || '').trim()).filter(Boolean)))
+    : [];
   return {
     userId: doc.userId ? String(doc.userId) : null,
     displayName: doc.displayName == null ? null : String(doc.displayName),
@@ -58,6 +61,7 @@ function sanitizeProfileDoc(doc) {
     preferences: doc.preferences && typeof doc.preferences === 'object' && !Array.isArray(doc.preferences) ? doc.preferences : {},
     aliases: doc.aliases && typeof doc.aliases === 'object' && !Array.isArray(doc.aliases) ? doc.aliases : {},
     constraints: Array.isArray(doc.constraints) ? doc.constraints.map((item) => String(item)).filter(Boolean) : [],
+    crmShareAllWith,
     source: doc.source == null ? null : String(doc.source),
     createdAt: doc.createdAt || null,
     updatedAt: doc.updatedAt || null
@@ -78,6 +82,7 @@ export function mergeUserProfilePatch(existingDoc, patch, source) {
     preferences: existing.preferences || {},
     aliases: existing.aliases || {},
     constraints: existing.constraints || [],
+    crmShareAllWith: existing.crmShareAllWith || [],
     source: source ? String(source) : (existing.source || null),
     createdAt: existing.createdAt || now,
     updatedAt: now
@@ -103,6 +108,10 @@ export function mergeUserProfilePatch(existingDoc, patch, source) {
   if (incoming.constraints !== undefined) {
     const values = Array.isArray(incoming.constraints) ? incoming.constraints : [];
     next.constraints = values.map((item) => String(item)).filter(Boolean);
+  }
+  if (incoming.crmShareAllWith !== undefined) {
+    const values = Array.isArray(incoming.crmShareAllWith) ? incoming.crmShareAllWith : [];
+    next.crmShareAllWith = Array.from(new Set(values.map((item) => String(item || '').trim()).filter(Boolean)));
   }
 
   return next;

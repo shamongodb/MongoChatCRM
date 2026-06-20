@@ -25,6 +25,7 @@ const TASK_LIST_FILTERS_STORAGE_KEY = 'webUxTaskListHiddenIds';
 
 let voicePttRecording = false;
 let voiceShortcutHeld = false;
+let voiceMicPointerHeld = false;
 let voiceCancelStart = false;
 let voiceMediaStream = null;
 let voiceMediaRecorder = null;
@@ -103,15 +104,61 @@ const MILESTONE_STATUS_ORDER = ['On Target', 'Delayed', 'Completed'];
 const viewTitleEl = document.getElementById('viewTitle');
 const cardsContainerEl = document.getElementById('cardsContainer');
 const navIconsEl = document.getElementById('navIcons');
+const appShellEl = document.querySelector('.app-shell');
+const MOBILE_MQ = window.matchMedia('(max-width: 768px)');
 const chatSessionListEl = document.getElementById('chatSessionList');
 const chatMessagesEl = document.getElementById('chatMessages');
 const chatInputEl = document.getElementById('chatInput');
+const chatInputWrapEl = document.querySelector('.chat-input-wrap');
+const chatMicBtnEl = document.getElementById('chatMicBtn');
 const chatSendBtnEl = document.getElementById('chatSendBtn');
 const chatStatusEl = document.getElementById('chatStatus');
 const newChatBtnEl = document.getElementById('newChatBtn');
 const authSignedInEl = document.getElementById('authSignedIn');
 const authUserEmailEl = document.getElementById('authUserEmail');
 const signOutBtnEl = document.getElementById('signOutBtn');
+
+function isMobileLayout() {
+  return MOBILE_MQ.matches;
+}
+
+function setMobileChatOpen(open) {
+  appShellEl?.classList.toggle('is-chat-open', open);
+  const chatBtn = navIconsEl.querySelector('[data-view="chat"]');
+  chatBtn?.classList.toggle('active', open);
+  if (open) {
+    navIconsEl.querySelectorAll('.icon-btn:not([data-view="chat"])').forEach((btn) => {
+      btn.classList.remove('active');
+    });
+  }
+}
+
+function updateChatInputPlaceholder() {
+  if (!chatInputEl) return;
+  chatInputEl.placeholder = isMobileLayout()
+    ? 'Message (hold mic to speak)'
+    : 'Message (hold mic or ⌘⇧1 to speak)';
+}
+
+function isVoiceInputSupported() {
+  return (
+    typeof navigator !== 'undefined' &&
+    !!navigator.mediaDevices?.getUserMedia &&
+    typeof MediaRecorder !== 'undefined'
+  );
+}
+
+function updateVoiceRecordingUi(isRecording) {
+  chatMicBtnEl?.classList.toggle('recording', isRecording);
+  chatInputWrapEl?.classList.toggle('is-recording', isRecording);
+  if (chatMicBtnEl) {
+    chatMicBtnEl.setAttribute('aria-pressed', isRecording ? 'true' : 'false');
+    chatMicBtnEl.setAttribute('aria-label', isRecording ? 'Recording…' : 'Hold to speak');
+  }
+  if (chatInputEl) {
+    chatInputEl.disabled = isRecording;
+  }
+}
 
 function setStatus(text) {
   chatStatusEl.textContent = text || '';
@@ -1376,6 +1423,7 @@ async function startVoiceCapture() {
   voiceMediaRecorder.onerror = () => setStatus('Recording error');
   voiceMediaRecorder.start(200);
   voicePttRecording = true;
+  updateVoiceRecordingUi(true);
   setStatus('Listening…');
 }
 
@@ -1384,10 +1432,12 @@ function stopVoiceCaptureAndSend() {
   const rec = voiceMediaRecorder;
   if (!rec) {
     voicePttRecording = false;
+    updateVoiceRecordingUi(false);
     stopVoiceMediaStream();
     return;
   }
   voicePttRecording = false;
+  updateVoiceRecordingUi(false);
   voiceMediaRecorder = null;
   rec.onstop = async () => {
     stopVoiceMediaStream();
@@ -1438,6 +1488,54 @@ function onVoiceKeyUp(event) {
     return;
   }
   stopVoiceCaptureAndSend();
+}
+
+function onChatMicPointerDown(event) {
+  if (event.pointerType === 'mouse' && event.button !== 0) return;
+  event.preventDefault();
+  chatMicBtnEl?.setPointerCapture?.(event.pointerId);
+  voiceMicPointerHeld = true;
+  startVoiceCapture();
+}
+
+function onChatMicPointerUp(event) {
+  if (!voiceMicPointerHeld) return;
+  voiceMicPointerHeld = false;
+  if (chatMicBtnEl?.hasPointerCapture?.(event.pointerId)) {
+    chatMicBtnEl.releasePointerCapture(event.pointerId);
+  }
+  if (!voicePttRecording) {
+    voiceCancelStart = true;
+    return;
+  }
+  stopVoiceCaptureAndSend();
+}
+
+function onChatMicPointerLeave(event) {
+  if (!voiceMicPointerHeld) return;
+  voiceMicPointerHeld = false;
+  if (chatMicBtnEl?.hasPointerCapture?.(event.pointerId)) {
+    chatMicBtnEl.releasePointerCapture(event.pointerId);
+  }
+  if (!voicePttRecording) {
+    voiceCancelStart = true;
+    return;
+  }
+  stopVoiceCaptureAndSend();
+}
+
+function setupChatMicBtn() {
+  if (!chatMicBtnEl) return;
+  if (!isVoiceInputSupported()) {
+    chatMicBtnEl.hidden = true;
+    chatMicBtnEl.title = 'Voice input not supported in this browser';
+    return;
+  }
+  chatMicBtnEl.hidden = false;
+  chatMicBtnEl.addEventListener('pointerdown', onChatMicPointerDown);
+  chatMicBtnEl.addEventListener('pointerup', onChatMicPointerUp);
+  chatMicBtnEl.addEventListener('pointercancel', onChatMicPointerUp);
+  chatMicBtnEl.addEventListener('pointerleave', onChatMicPointerLeave);
 }
 
 function cardHtml(title, body, meta = '') {
@@ -2680,6 +2778,7 @@ async function renderView(view) {
   state.currentView = view;
   const buttons = navIconsEl.querySelectorAll('.icon-btn');
   buttons.forEach((btn) => {
+    if (btn.dataset.view === 'chat') return;
     const active = btn.dataset.view === view;
     btn.classList.toggle('active', active);
   });
@@ -3006,6 +3105,14 @@ navIconsEl.addEventListener('click', async (event) => {
   const button = event.target.closest('.icon-btn');
   if (!button) return;
   const nextView = button.dataset.view || 'home';
+
+  if (isMobileLayout() && nextView === 'chat') {
+    setMobileChatOpen(true);
+    return;
+  }
+  if (isMobileLayout()) {
+    setMobileChatOpen(false);
+  }
   await renderView(nextView);
 });
 
@@ -3034,13 +3141,26 @@ if (signOutBtnEl) {
 window.addEventListener('keydown', onVoiceKeyDown, true);
 window.addEventListener('keyup', onVoiceKeyUp, true);
 window.addEventListener('blur', () => {
-  if (!voiceShortcutHeld && !voicePttRecording) return;
+  if (!voiceShortcutHeld && !voicePttRecording && !voiceMicPointerHeld) return;
   voiceShortcutHeld = false;
+  voiceMicPointerHeld = false;
   if (!voicePttRecording) {
     voiceCancelStart = true;
     return;
   }
   stopVoiceCaptureAndSend();
+});
+
+MOBILE_MQ.addEventListener('change', async () => {
+  updateChatInputPlaceholder();
+  if (!isMobileLayout()) {
+    setMobileChatOpen(false);
+    if (!state.currentView || state.currentView === 'chat') {
+      await renderView('home');
+    }
+  } else {
+    setMobileChatOpen(true);
+  }
 });
 
 function hasPendingOAuthRedirectHash() {
@@ -3059,7 +3179,13 @@ function hasPendingOAuthRedirectHash() {
     }
     updateAuthUi();
     loadTaskListFilterState();
-    await renderView('home');
+    setupChatMicBtn();
+    updateChatInputPlaceholder();
+    if (isMobileLayout()) {
+      setMobileChatOpen(true);
+    } else {
+      await renderView('home');
+    }
     await loadChatSessions();
     if (state.currentConversationId) {
       await loadConversationMessages(state.currentConversationId);

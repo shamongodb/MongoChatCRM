@@ -7,6 +7,11 @@ const mongoUri = String(process.env.MONGO_URI || '').trim();
 const mongoDbName = String(process.env.MONGO_DB_NAME || 'sales_data').trim();
 const taskListsCollectionName = String(process.env.MONGO_TASK_LISTS_COLLECTION || 'taskLists').trim();
 const tasksCollectionName = String(process.env.MONGO_TASKS_COLLECTION || 'tasks').trim();
+const TEST_USER_ID = 'google_test_task_model';
+
+function runCrmTool(name, args) {
+  return runMongoTool(name, args, { userId: TEST_USER_ID, initiatedByUserId: TEST_USER_ID });
+}
 
 async function connectMongoOrSkip(t) {
   const client = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 2000 });
@@ -36,11 +41,11 @@ if (!mongoUri) {
 
     let taskListId = null;
     try {
-      const created = await runMongoTool('createTaskList', { name: `Ops ${runId}`, owner: `Owner ${runId}` });
+      const created = await runCrmTool('createTaskList', { name: `Ops ${runId}`, owner: `Owner ${runId}` });
       assert.equal(created.ok, true);
       taskListId = String(created.taskListId);
 
-      const added = await runMongoTool('addTaskToList', {
+      const added = await runCrmTool('addTaskToList', {
         taskListId,
         task: `Review migration ${runId}`,
         status: 'open',
@@ -54,7 +59,7 @@ if (!mongoUri) {
       assert.ok(taskDoc);
       assert.equal(String(taskDoc.task), `Review migration ${runId}`);
 
-      const fetched = await runMongoTool('getTaskList', { taskListId });
+      const fetched = await runCrmTool('getTaskList', { taskListId });
       assert.equal(String(fetched._id), taskListId);
       assert.equal(Array.isArray(fetched.tasks), true);
       assert.equal(fetched.tasks.some((row) => String(row.taskId) === String(added.task.taskId)), true);
@@ -76,22 +81,22 @@ if (!mongoUri) {
 
     let taskListId = null;
     try {
-      const created = await runMongoTool('createTaskList', { name: `Disambiguation ${runId}` });
+      const created = await runCrmTool('createTaskList', { name: `Disambiguation ${runId}` });
       assert.equal(created.ok, true);
       taskListId = String(created.taskListId);
 
-      const first = await runMongoTool('addTaskToList', {
+      const first = await runCrmTool('addTaskToList', {
         taskListId,
         task: `Follow up with legal ${runId}`
       });
-      const second = await runMongoTool('addTaskToList', {
+      const second = await runCrmTool('addTaskToList', {
         taskListId,
         task: `Follow up with finance ${runId}`
       });
       assert.equal(first.ok, true);
       assert.equal(second.ok, true);
 
-      const ambiguous = await runMongoTool('updateTaskInList', {
+      const ambiguous = await runCrmTool('updateTaskInList', {
         taskListId,
         taskText: 'follow up',
         status: 'done'
@@ -100,7 +105,7 @@ if (!mongoUri) {
       assert.equal(Array.isArray(ambiguous.candidates), true);
       assert.ok(ambiguous.candidates.length >= 2);
 
-      const updated = await runMongoTool('updateTaskInList', {
+      const updated = await runCrmTool('updateTaskInList', {
         taskListId,
         taskId: String(first.task.taskId),
         status: 'done'
@@ -112,7 +117,7 @@ if (!mongoUri) {
       assert.equal(String(persisted.status), 'done');
     } finally {
       if (taskListId) {
-        await runMongoTool('deleteTaskList', { taskListId, confirm: true });
+        await runCrmTool('deleteTaskList', { taskListId, confirm: true });
       }
       await client.close();
     }
@@ -127,18 +132,18 @@ if (!mongoUri) {
 
     let taskListId = null;
     try {
-      const created = await runMongoTool('createTaskList', { name: `Owner Scope ${runId}`, owner: `List Owner ${runId}` });
+      const created = await runCrmTool('createTaskList', { name: `Owner Scope ${runId}`, owner: `List Owner ${runId}` });
       assert.equal(created.ok, true);
       taskListId = String(created.taskListId);
 
-      const added = await runMongoTool('addTaskToList', {
+      const added = await runCrmTool('addTaskToList', {
         taskListId,
         task: `Follow up with John ${runId}`
       });
       assert.equal(added.ok, true);
       assert.equal(added.task.owner, null);
 
-      const updated = await runMongoTool('updateTaskInList', {
+      const updated = await runCrmTool('updateTaskInList', {
         taskId: String(added.task.taskId),
         owner: `Task Owner ${runId}`
       });
@@ -150,7 +155,7 @@ if (!mongoUri) {
       assert.equal(String(persisted.owner), `Task Owner ${runId}`);
     } finally {
       if (taskListId) {
-        await runMongoTool('deleteTaskList', { taskListId, confirm: true });
+        await runCrmTool('deleteTaskList', { taskListId, confirm: true });
       }
       await client.close();
     }
@@ -165,24 +170,24 @@ if (!mongoUri) {
 
     let taskListId = null;
     try {
-      const created = await runMongoTool('createTaskList', { name: `Eco ${runId}`, owner: `Benji ${runId}` });
+      const created = await runCrmTool('createTaskList', { name: `Eco ${runId}`, owner: `Benji ${runId}` });
       assert.equal(created.ok, true);
       taskListId = String(created.taskListId);
 
-      const added = await runMongoTool('addTaskToList', { taskListId, task: `Item ${runId}` });
+      const added = await runCrmTool('addTaskToList', { taskListId, task: `Item ${runId}` });
       assert.equal(added.ok, true);
 
-      const cleared = await runMongoTool('updateTaskList', { taskListId, owner: '' });
+      const cleared = await runCrmTool('updateTaskList', { taskListId, owner: '' });
       assert.equal(cleared.ok, true);
       assert.equal(cleared.taskList.owner, null);
 
-      const renamed = await runMongoTool('updateTaskList', { taskListId, name: `Eco renamed ${runId}` });
+      const renamed = await runCrmTool('updateTaskList', { taskListId, name: `Eco renamed ${runId}` });
       assert.equal(renamed.ok, true);
       const taskDoc = await tasks.findOne({ taskListId });
       assert.equal(String(taskDoc.taskListName), `Eco renamed ${runId}`);
     } finally {
       if (taskListId) {
-        await runMongoTool('deleteTaskList', { taskListId, confirm: true });
+        await runCrmTool('deleteTaskList', { taskListId, confirm: true });
       }
       await client.close();
     }
@@ -197,16 +202,16 @@ if (!mongoUri) {
 
     let taskListId = null;
     try {
-      const created = await runMongoTool('createTaskList', { name: `Delete ${runId}` });
+      const created = await runCrmTool('createTaskList', { name: `Delete ${runId}` });
       assert.equal(created.ok, true);
       taskListId = String(created.taskListId);
 
-      await runMongoTool('addTaskToList', { taskListId, task: `Delete me ${runId}` });
-      await runMongoTool('addTaskToList', { taskListId, task: `Delete me too ${runId}` });
+      await runCrmTool('addTaskToList', { taskListId, task: `Delete me ${runId}` });
+      await runCrmTool('addTaskToList', { taskListId, task: `Delete me too ${runId}` });
       const before = await tasks.countDocuments({ taskListId });
       assert.equal(before >= 2, true);
 
-      const deleted = await runMongoTool('deleteTaskList', { taskListId, confirm: true });
+      const deleted = await runCrmTool('deleteTaskList', { taskListId, confirm: true });
       assert.equal(deleted.ok, true);
 
       const remaining = await tasks.countDocuments({ taskListId });

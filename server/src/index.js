@@ -51,6 +51,14 @@ import {
 import { createLegacyAgentRunner } from './agent/orchestrator.js';
 import { createLangGraphAgentRunner } from './agent/graph/index.js';
 import { embedSingleText } from './voyage-embed.js';
+import {
+  assertDocumentAccessible,
+  buildOwnerVisibilityFilter,
+  getVisibleOwnerUserIds,
+  mergeCrmFilter,
+  resolveCrmActor,
+  stampOwnerUserId
+} from './crm-access.js';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -155,7 +163,7 @@ const voiceUpload = multer({
 });
 
 const MAIN_SYSTEM_PROMPT =
-  "You are a Google Workspace orchestrator. You can create workload decks, manage notes in Drive, and manage MongoDB task lists, accounts, workloads, contacts, milestones, and initiatives. For task lists use Mongo tools only: createTaskList, updateTaskList, addTaskToList, updateTaskInList, listTaskLists, getTaskList, deleteTaskList. Use updateTaskList to change only the list name or list owner; pass owner as an empty string to clear ownership (unowned list). Task-level ownership is separate and should be updated on the task via addTaskToList/updateTaskInList owner. listTaskLists owner matches either the owner field or the list name (case-insensitive), so a person-named list with no owner still resolves. For accounts use Mongo tools only: addAccount, updateAccount, listAccounts, getAccount. For workloads use Mongo tools only: addWorkload, updateWorkload, listWorkloads, getWorkload. For milestones use Mongo tools only: addMilestone, updateMilestone, listMilestones, getMilestone. For initiatives use Mongo tools only: addInitiative, updateInitiative, listInitiatives, getInitiative, searchInitiatives. Initiatives require initiativeName and at least one accountId; contactIds and workloadIds must belong to one of the initiative accounts. Use searchInitiatives for semantic search over initiative names when the user asks conceptually; use listInitiatives with q for fuzzy text. For contacts use Mongo tools only: addContact, updateContact, listContacts, getContact, deleteContact, standardizeContactFields. Contact canonical fields include name, linkedIn, imageUrl, notes, title, email, phone, mobile, department, location, and relationship tracking fields. Never use legacy Google Doc team to-do tools. For deleting task lists, always ask for explicit user confirmation first and only call deleteTaskList when confirm is true. For deleting contacts, always ask for explicit user confirmation first and only call deleteContact when confirm is true. For account creation safety: always call listAccounts first using fuzzy q (not exact name filtering) to check for existing accounts. If there is any exact or close match, ask whether to use the existing account or create a new one. Only call addAccount when the user explicitly confirms creating a new account, and pass confirm=true. For workload creation or assignment safety: always call listWorkloads first using accountId and fuzzy q to check for existing workloads; if user mentions account-prefixed naming (for example, \"Lumen - X\" vs \"X\"), retry with both variants before concluding not found. Only call addWorkload when the user explicitly confirms creating a new workload, and pass confirm=true. Workload stage is separate from description/notes, defaults to Research when omitted on create, and must be one of: Research, Discovery, Scope, Technical Validation, Closed. For contact creation or assignment safety: always call listContacts first using accountId plus fuzzy q/email to check for existing contacts; if no exact hit and user says the contact exists, retry with close spelling variants before concluding not found. Only call addContact when the user explicitly confirms creating a new contact, and pass confirm=true. Accounts, workloads, contacts, and milestones support notes/doc links according to their schema. If a user provides only a bare link without a document name, ask what to call it before saving. For adding tasks, taskListId and task are required; task owner is optional via owner and is independent from list owner; status defaults to open when omitted, dueDate/person are optional, and optional priority must be one of: Priority 1, Priority 2, Priority 3, Priority 4. For updating tasks, taskId can be used without taskListId, while taskText resolution requires taskListId. Keep notes behavior unchanged: ask before appendNotesToDoc unless the user already granted permission, and use getNotesRootFolderId + resolveNotesLocation flows for account/opp/workload notes. If profile memory is missing and onboarding instructions are present, ask brief setup questions first and save profile answers with updateUserProfileMemory.";
+  "You are a Google Workspace orchestrator. You can create workload decks, manage notes in Drive, and manage MongoDB task lists, accounts, workloads, contacts, milestones, and initiatives. CRM records are visibility-scoped by the authenticated user and optional teammate sharing; never assume records from other owners are accessible. For task lists use Mongo tools only: createTaskList, updateTaskList, addTaskToList, updateTaskInList, listTaskLists, getTaskList, deleteTaskList. Use updateTaskList to change only the list name or list owner; pass owner as an empty string to clear ownership (unowned list). Task-level ownership is separate and should be updated on the task via addTaskToList/updateTaskInList owner. listTaskLists owner matches either the owner field or the list name (case-insensitive), so a person-named list with no owner still resolves. For accounts use Mongo tools only: addAccount, updateAccount, listAccounts, getAccount. For workloads use Mongo tools only: addWorkload, updateWorkload, listWorkloads, getWorkload. For milestones use Mongo tools only: addMilestone, updateMilestone, listMilestones, getMilestone. For initiatives use Mongo tools only: addInitiative, updateInitiative, listInitiatives, getInitiative, searchInitiatives. Initiatives require initiativeName and at least one accountId; contactIds and workloadIds must belong to one of the initiative accounts. Use searchInitiatives for semantic search over initiative names when the user asks conceptually; use listInitiatives with q for fuzzy text. For contacts use Mongo tools only: addContact, updateContact, listContacts, getContact, deleteContact, standardizeContactFields. Contact canonical fields include name, linkedIn, imageUrl, notes, title, email, phone, mobile, department, location, and relationship tracking fields. Never use legacy Google Doc team to-do tools. For deleting task lists, always ask for explicit user confirmation first and only call deleteTaskList when confirm is true. For deleting contacts, always ask for explicit user confirmation first and only call deleteContact when confirm is true. For account creation safety: always call listAccounts first using fuzzy q (not exact name filtering) to check for existing accounts. If there is any exact or close match, ask whether to use the existing account or create a new one. Only call addAccount when the user explicitly confirms creating a new account, and pass confirm=true. For workload creation or assignment safety: always call listWorkloads first using accountId and fuzzy q to check for existing workloads; if user mentions account-prefixed naming (for example, \"Lumen - X\" vs \"X\"), retry with both variants before concluding not found. Only call addWorkload when the user explicitly confirms creating a new workload, and pass confirm=true. Workload stage is separate from description/notes, defaults to Research when omitted on create, and must be one of: Research, Discovery, Scope, Technical Validation, Closed. For contact creation or assignment safety: always call listContacts first using accountId plus fuzzy q/email to check for existing contacts; if no exact hit and user says the contact exists, retry with close spelling variants before concluding not found. Only call addContact when the user explicitly confirms creating a new contact, and pass confirm=true. Accounts, workloads, contacts, and milestones support notes/doc links according to their schema. If a user provides only a bare link without a document name, ask what to call it before saving. For adding tasks, taskListId and task are required; task owner is optional via owner and is independent from list owner; status defaults to open when omitted, dueDate/person are optional, and optional priority must be one of: Priority 1, Priority 2, Priority 3, Priority 4. For updating tasks, taskId can be used without taskListId, while taskText resolution requires taskListId. Keep notes behavior unchanged: ask before appendNotesToDoc unless the user already granted permission, and use getNotesRootFolderId + resolveNotesLocation flows for account/opp/workload notes. If profile memory is missing and onboarding instructions are present, ask brief setup questions first and save profile answers with updateUserProfileMemory.";
 const RESPONSE_MODE_CHAT_DEFAULT = 'chat_default';
 const RESPONSE_MODE_VOICE_CONVERSATIONAL = 'voice_conversational';
 const RESPONSE_MODE_VOICE_WHIMSICAL = 'voice_whimsical';
@@ -235,7 +243,8 @@ const PROFILE_ALLOWED_PATCH_KEYS = new Set([
   'organization',
   'preferences',
   'aliases',
-  'constraints'
+  'constraints',
+  'crmShareAllWith'
 ]);
 const PROFILE_ALLOWED_SOURCE_VALUES = new Set(['user_input', 'admin', 'system']);
 const REQUIRED_PROFILE_FIELDS = ['displayName'];
@@ -305,6 +314,21 @@ function sanitizeProfileConstraints(value, maxItems = 20, maxItemLen = 180) {
   return out;
 }
 
+function sanitizeProfileUserIdList(value, maxItems = 200, maxItemLen = 200) {
+  if (value === null) return [];
+  if (!Array.isArray(value)) return undefined;
+  const out = [];
+  const seen = new Set();
+  for (const item of value) {
+    const clean = sanitizeProfileString(item, maxItemLen);
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    out.push(clean);
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
 function sanitizeUserProfilePatch(rawPatch) {
   if (!rawPatch || typeof rawPatch !== 'object' || Array.isArray(rawPatch)) {
     return { patch: null, invalidKeys: [] };
@@ -328,6 +352,11 @@ function sanitizeUserProfilePatch(rawPatch) {
     }
     if (key === 'constraints') {
       const next = sanitizeProfileConstraints(rawPatch[key], 20, 180);
+      if (next !== undefined) patch[key] = next;
+      continue;
+    }
+    if (key === 'crmShareAllWith') {
+      const next = sanitizeProfileUserIdList(rawPatch[key], 200, 200);
       if (next !== undefined) patch[key] = next;
     }
   }
@@ -434,9 +463,24 @@ function resolveAuditActorId(toolContext = {}) {
   return 'system';
 }
 
+async function resolveCrmVisibilityForRequest(req, db) {
+  const userId = resolveEffectiveUserId(req, req?.query?.userId ?? req?.body?.userId);
+  if (!userId) return { error: 'userId is required', status: 400 };
+  const visibleOwnerUserIds = await getVisibleOwnerUserIds(db, {
+    userId,
+    userProfilesCollection: memoryConfig.userProfilesCollection
+  });
+  if (!visibleOwnerUserIds.length) return { error: 'userId is required', status: 400 };
+  return { userId, visibleOwnerUserIds };
+}
+
+function withOwnerVisibilityFilter(baseFilter, visibleOwnerUserIds) {
+  return mergeCrmFilter(baseFilter, buildOwnerVisibilityFilter(visibleOwnerUserIds));
+}
+
 function withAuditFieldsForInsert(doc, actorId) {
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return doc;
-  const next = { ...doc };
+  const next = stampOwnerUserId(doc, actorId);
   if (!next.createdBy) next.createdBy = actorId;
   if (!next.updatedBy) next.updatedBy = actorId;
   return next;
@@ -479,6 +523,51 @@ function withAuditedCollection(collection, actorId) {
       }
       if (prop === 'updateMany') {
         return (filter, updateDoc, ...rest) => target.updateMany(filter, withAuditFieldsForUpdate(updateDoc, actorId), ...rest);
+      }
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value === 'function') return value.bind(target);
+      return value;
+    }
+  });
+}
+
+function withVisibleCollection(collection, visibleOwnerUserIds) {
+  const visibilityFilter = buildOwnerVisibilityFilter(visibleOwnerUserIds);
+  return new Proxy(collection, {
+    get(target, prop, receiver) {
+      if (prop === 'find') {
+        return (filter = {}, ...rest) => target.find(withOwnerVisibilityFilter(filter, visibleOwnerUserIds), ...rest);
+      }
+      if (prop === 'findOne') {
+        return (filter = {}, ...rest) => target.findOne(withOwnerVisibilityFilter(filter, visibleOwnerUserIds), ...rest);
+      }
+      if (prop === 'updateOne') {
+        return (filter = {}, updateDoc, ...rest) => target.updateOne(withOwnerVisibilityFilter(filter, visibleOwnerUserIds), updateDoc, ...rest);
+      }
+      if (prop === 'updateMany') {
+        return (filter = {}, updateDoc, ...rest) => target.updateMany(withOwnerVisibilityFilter(filter, visibleOwnerUserIds), updateDoc, ...rest);
+      }
+      if (prop === 'deleteOne') {
+        return (filter = {}, ...rest) => target.deleteOne(withOwnerVisibilityFilter(filter, visibleOwnerUserIds), ...rest);
+      }
+      if (prop === 'deleteMany') {
+        return (filter = {}, ...rest) => target.deleteMany(withOwnerVisibilityFilter(filter, visibleOwnerUserIds), ...rest);
+      }
+      if (prop === 'countDocuments') {
+        return (filter = {}, ...rest) => target.countDocuments(withOwnerVisibilityFilter(filter, visibleOwnerUserIds), ...rest);
+      }
+      if (prop === 'aggregate') {
+        return (pipeline = [], ...rest) => {
+          const steps = Array.isArray(pipeline) ? [...pipeline] : [];
+          const firstStage = steps[0] || {};
+          const startsWithSearch = !!(firstStage.$search || firstStage.$vectorSearch);
+          if (startsWithSearch) {
+            steps.splice(1, 0, { $match: visibilityFilter });
+          } else {
+            steps.unshift({ $match: visibilityFilter });
+          }
+          return target.aggregate(steps, ...rest);
+        };
       }
       const value = Reflect.get(target, prop, receiver);
       if (typeof value === 'function') return value.bind(target);
@@ -1101,24 +1190,31 @@ async function ensureCrmCollections(db) {
   await Promise.all([
     db.collection(MONGO_TASK_LISTS_COLLECTION).createIndex({ owner: 1, updatedAt: -1 }),
     db.collection(MONGO_TASK_LISTS_COLLECTION).createIndex({ name: 1, updatedAt: -1 }),
+    db.collection(MONGO_TASK_LISTS_COLLECTION).createIndex({ ownerUserId: 1, updatedAt: -1 }),
     db.collection(MONGO_TASKS_COLLECTION).createIndex({ taskListId: 1, updatedAt: -1 }),
     db.collection(MONGO_TASKS_COLLECTION).createIndex({ status: 1, updatedAt: -1 }),
     db.collection(MONGO_TASKS_COLLECTION).createIndex({ taskListId: 1, status: 1, updatedAt: -1 }),
     db.collection(MONGO_TASKS_COLLECTION).createIndex({ taskId: 1 }, { unique: true, sparse: true }),
+    db.collection(MONGO_TASKS_COLLECTION).createIndex({ ownerUserId: 1, updatedAt: -1 }),
     db.collection(MONGO_ACCOUNTS_COLLECTION).createIndex({ name: 1, updatedAt: -1 }),
     db.collection(MONGO_ACCOUNTS_COLLECTION).createIndex({ parentAccountId: 1, updatedAt: -1 }),
+    db.collection(MONGO_ACCOUNTS_COLLECTION).createIndex({ ownerUserId: 1, updatedAt: -1 }),
     db.collection(MONGO_WORKLOADS_COLLECTION).createIndex({ accountId: 1, updatedAt: -1 }),
     db.collection(MONGO_WORKLOADS_COLLECTION).createIndex({ name: 1, updatedAt: -1 }),
     db.collection(MONGO_WORKLOADS_COLLECTION).createIndex({ contactIds: 1, updatedAt: -1 }),
+    db.collection(MONGO_WORKLOADS_COLLECTION).createIndex({ ownerUserId: 1, updatedAt: -1 }),
     db.collection(MONGO_MILESTONES_COLLECTION).createIndex({ milestoneDate: 1, status: 1 }),
     db.collection(MONGO_MILESTONES_COLLECTION).createIndex({ accountId: 1, milestoneDate: 1 }),
     db.collection(MONGO_MILESTONES_COLLECTION).createIndex({ 'workloadIds.workloadId': 1, milestoneDate: 1 }),
     db.collection(MONGO_MILESTONES_COLLECTION).createIndex({ updatedAt: -1 }),
+    db.collection(MONGO_MILESTONES_COLLECTION).createIndex({ ownerUserId: 1, updatedAt: -1 }),
     db.collection(MONGO_CONTACTS_COLLECTION).createIndex({ accountId: 1, updatedAt: -1 }),
     db.collection(MONGO_CONTACTS_COLLECTION).createIndex({ email: 1, updatedAt: -1 }),
     db.collection(MONGO_CONTACTS_COLLECTION).createIndex({ name: 1, updatedAt: -1 }),
+    db.collection(MONGO_CONTACTS_COLLECTION).createIndex({ ownerUserId: 1, updatedAt: -1 }),
     db.collection(MONGO_INITIATIVES_COLLECTION).createIndex({ updatedAt: -1 }),
-    db.collection(MONGO_INITIATIVES_COLLECTION).createIndex({ 'accounts.accountId': 1, updatedAt: -1 })
+    db.collection(MONGO_INITIATIVES_COLLECTION).createIndex({ 'accounts.accountId': 1, updatedAt: -1 }),
+    db.collection(MONGO_INITIATIVES_COLLECTION).createIndex({ ownerUserId: 1, updatedAt: -1 })
   ]);
 
   if (!isAtlasSearchEnabled()) return;
@@ -4061,17 +4157,24 @@ async function handleInitiativeMongoTool(name, args, context) {
 async function runMongoTool(name, args, _toolContext = {}) {
   await ensureCrmSetup();
   const db = await getMongoDb();
+  const crmActorUserId = resolveCrmActor(_toolContext);
+  if (!crmActorUserId) return { error: 'Cannot use CRM tools without userId context.' };
+  const visibleOwnerUserIds = await getVisibleOwnerUserIds(db, {
+    userId: crmActorUserId,
+    userProfilesCollection: memoryConfig.userProfilesCollection
+  });
+  if (!visibleOwnerUserIds.length) return { error: 'Cannot use CRM tools without user visibility scope.' };
   const auditActorId = resolveAuditActorId(_toolContext);
-  const taskLists = withAuditedCollection(db.collection(MONGO_TASK_LISTS_COLLECTION), auditActorId);
-  const tasks = withAuditedCollection(db.collection(MONGO_TASKS_COLLECTION), auditActorId);
-  const contacts = withAuditedCollection(db.collection(MONGO_CONTACTS_COLLECTION), auditActorId);
-  const accounts = withAuditedCollection(db.collection(MONGO_ACCOUNTS_COLLECTION), auditActorId);
-  const workloads = withAuditedCollection(db.collection(MONGO_WORKLOADS_COLLECTION), auditActorId);
-  const milestones = withAuditedCollection(db.collection(MONGO_MILESTONES_COLLECTION), auditActorId);
-  const initiatives = withAuditedCollection(db.collection(MONGO_INITIATIVES_COLLECTION), auditActorId);
+  const taskLists = withVisibleCollection(withAuditedCollection(db.collection(MONGO_TASK_LISTS_COLLECTION), auditActorId), visibleOwnerUserIds);
+  const tasks = withVisibleCollection(withAuditedCollection(db.collection(MONGO_TASKS_COLLECTION), auditActorId), visibleOwnerUserIds);
+  const contacts = withVisibleCollection(withAuditedCollection(db.collection(MONGO_CONTACTS_COLLECTION), auditActorId), visibleOwnerUserIds);
+  const accounts = withVisibleCollection(withAuditedCollection(db.collection(MONGO_ACCOUNTS_COLLECTION), auditActorId), visibleOwnerUserIds);
+  const workloads = withVisibleCollection(withAuditedCollection(db.collection(MONGO_WORKLOADS_COLLECTION), auditActorId), visibleOwnerUserIds);
+  const milestones = withVisibleCollection(withAuditedCollection(db.collection(MONGO_MILESTONES_COLLECTION), auditActorId), visibleOwnerUserIds);
+  const initiatives = withVisibleCollection(withAuditedCollection(db.collection(MONGO_INITIATIVES_COLLECTION), auditActorId), visibleOwnerUserIds);
   const sessionOptions = (session) => (session ? { session } : undefined);
 
-  const taskToolResult = await handleTaskMongoTool(name, args, { taskLists, tasks, sessionOptions });
+  const taskToolResult = await handleTaskMongoTool(name, args, { taskLists, tasks, sessionOptions, visibleOwnerUserIds });
   if (taskToolResult !== undefined) return taskToolResult;
 
   const userProfileToolResult = await handleUserProfileMongoTool(name, args, { db, toolContext: _toolContext });
@@ -4084,6 +4187,8 @@ async function runMongoTool(name, args, _toolContext = {}) {
     if (!_id) return { error: 'Invalid accountId' };
     const account = await accounts.findOne({ _id }, sessionOptions(session));
     if (!account) return { error: 'Account not found' };
+    const access = assertDocumentAccessible(account, visibleOwnerUserIds, 'Account');
+    if (!access.ok) return { error: access.error };
     return {
       accountId: String(account._id),
       accountName: String(account.name || '').trim(),
@@ -4465,6 +4570,8 @@ async function runMongoTool(name, args, _toolContext = {}) {
       if (!_id) return { error: `Invalid ${label.toLowerCase()}Id` };
       const row = await collection.findOne({ _id });
       if (!row) return { error: `${label} not found` };
+      const access = assertDocumentAccessible(row, visibleOwnerUserIds, label);
+      if (!access.ok) return { error: access.error };
       return { id: String(row._id), row };
     }
     const query = normalizeSearchText(nameValue);
@@ -4538,7 +4645,8 @@ async function runMongoTool(name, args, _toolContext = {}) {
     addWorkloadRefToContacts,
     removeWorkloadRefFromContacts,
     syncWorkloadNameOnContacts,
-    sessionOptions
+    sessionOptions,
+    visibleOwnerUserIds
   });
   if (accountWorkloadToolResult !== undefined) return accountWorkloadToolResult;
 
@@ -4548,7 +4656,8 @@ async function runMongoTool(name, args, _toolContext = {}) {
     resolveAccountRef,
     resolveWorkloadRefs,
     resolveUniqueDocumentTarget,
-    hasInputItems
+    hasInputItems,
+    visibleOwnerUserIds
   });
   if (milestoneToolResult !== undefined) return milestoneToolResult;
 
@@ -5045,7 +5154,8 @@ async function runMongoTool(name, args, _toolContext = {}) {
     resolveWorkloadRefsForAccountSet,
     enrichInitiativeDoc,
     hasInputItems,
-    resolveUniqueDocumentTarget
+    resolveUniqueDocumentTarget,
+    visibleOwnerUserIds
   });
   if (initiativeToolResult !== undefined) return initiativeToolResult;
 
@@ -5769,8 +5879,11 @@ app.get('/api/tasks/open', requireApiAuth, async (req, res) => {
   try {
     await ensureCrmSetup();
     const db = await getMongoDb();
-    const taskLists = db.collection(MONGO_TASK_LISTS_COLLECTION);
-    const tasks = db.collection(MONGO_TASKS_COLLECTION);
+    const visibility = await resolveCrmVisibilityForRequest(req, db);
+    if (visibility.error) return jsonErr(res, visibility.error, visibility.status || 400);
+    const { visibleOwnerUserIds } = visibility;
+    const taskLists = withVisibleCollection(db.collection(MONGO_TASK_LISTS_COLLECTION), visibleOwnerUserIds);
+    const tasks = withVisibleCollection(db.collection(MONGO_TASKS_COLLECTION), visibleOwnerUserIds);
     const limit = normalizeLimit(req.query?.limit, 100, 500);
     const owner = req.query?.owner ? String(req.query.owner).trim() : '';
     const q = normalizeSearchText(req.query?.q);
@@ -5868,8 +5981,11 @@ app.delete('/api/tasks/:taskListId/:taskId', requireApiAuth, async (req, res) =>
     if (!_id) return jsonErr(res, 'Invalid taskListId', 400);
 
     const db = await getMongoDb();
-    const taskLists = db.collection(MONGO_TASK_LISTS_COLLECTION);
-    const tasks = db.collection(MONGO_TASKS_COLLECTION);
+    const visibility = await resolveCrmVisibilityForRequest(req, db);
+    if (visibility.error) return jsonErr(res, visibility.error, visibility.status || 400);
+    const { visibleOwnerUserIds } = visibility;
+    const taskLists = withVisibleCollection(db.collection(MONGO_TASK_LISTS_COLLECTION), visibleOwnerUserIds);
+    const tasks = withVisibleCollection(db.collection(MONGO_TASKS_COLLECTION), visibleOwnerUserIds);
     const list = await taskLists.findOne({ _id }, { projection: { _id: 1 } });
     if (!list) return jsonErr(res, 'Task list not found', 404);
 
@@ -5890,12 +6006,15 @@ app.get('/api/workloads', requireApiAuth, async (req, res) => {
   try {
     await ensureCrmSetup();
     const db = await getMongoDb();
+    const visibility = await resolveCrmVisibilityForRequest(req, db);
+    if (visibility.error) return jsonErr(res, visibility.error, visibility.status || 400);
+    const { visibleOwnerUserIds } = visibility;
     const limit = normalizeLimit(req.query?.limit, 100, 500);
     const accountId = req.query?.accountId ? String(req.query.accountId).trim() : '';
     const q = normalizeSearchText(req.query?.q);
     const filter = accountId ? { accountId } : {};
     const rows = await searchCollectionHybrid({
-      collection: db.collection(MONGO_WORKLOADS_COLLECTION),
+      collection: withVisibleCollection(db.collection(MONGO_WORKLOADS_COLLECTION), visibleOwnerUserIds),
       query: q,
       paths: ['name', 'description', 'notes', 'accountName', 'stage', 'contacts.name', 'contacts.email'],
       filter,
@@ -5936,10 +6055,13 @@ app.get('/api/accounts', requireApiAuth, async (req, res) => {
   try {
     await ensureCrmSetup();
     const db = await getMongoDb();
+    const visibility = await resolveCrmVisibilityForRequest(req, db);
+    if (visibility.error) return jsonErr(res, visibility.error, visibility.status || 400);
+    const { visibleOwnerUserIds } = visibility;
     const limit = normalizeLimit(req.query?.limit, 100, 500);
     const q = normalizeSearchText(req.query?.q);
     const rows = await searchCollectionHybrid({
-      collection: db.collection(MONGO_ACCOUNTS_COLLECTION),
+      collection: withVisibleCollection(db.collection(MONGO_ACCOUNTS_COLLECTION), visibleOwnerUserIds),
       query: q,
       paths: ['name', 'parentAccountName', 'documentLinks.name'],
       filter: {},
@@ -5955,12 +6077,15 @@ app.get('/api/contacts', requireApiAuth, async (req, res) => {
   try {
     await ensureCrmSetup();
     const db = await getMongoDb();
+    const visibility = await resolveCrmVisibilityForRequest(req, db);
+    if (visibility.error) return jsonErr(res, visibility.error, visibility.status || 400);
+    const { visibleOwnerUserIds } = visibility;
     const limit = normalizeLimit(req.query?.limit, 100, 500);
     const accountId = req.query?.accountId ? String(req.query.accountId).trim() : '';
     const q = normalizeSearchText(req.query?.q);
     const filter = accountId ? { accountId } : {};
     const rows = await searchCollectionHybrid({
-      collection: db.collection(MONGO_CONTACTS_COLLECTION),
+      collection: withVisibleCollection(db.collection(MONGO_CONTACTS_COLLECTION), visibleOwnerUserIds),
       query: q,
       paths: [
         'name',
@@ -6050,15 +6175,18 @@ app.delete('/api/contacts/:contactId', requireApiAuth, async (req, res) => {
   }
 });
 
-app.get('/api/dashboard/snapshot', requireApiAuth, async (_req, res) => {
+app.get('/api/dashboard/snapshot', requireApiAuth, async (req, res) => {
   try {
     await ensureCrmSetup();
     const db = await getMongoDb();
-    const taskLists = db.collection(MONGO_TASK_LISTS_COLLECTION);
-    const tasks = db.collection(MONGO_TASKS_COLLECTION);
-    const workloads = db.collection(MONGO_WORKLOADS_COLLECTION);
-    const accounts = db.collection(MONGO_ACCOUNTS_COLLECTION);
-    const contacts = db.collection(MONGO_CONTACTS_COLLECTION);
+    const visibility = await resolveCrmVisibilityForRequest(req, db);
+    if (visibility.error) return jsonErr(res, visibility.error, visibility.status || 400);
+    const { visibleOwnerUserIds } = visibility;
+    const taskLists = withVisibleCollection(db.collection(MONGO_TASK_LISTS_COLLECTION), visibleOwnerUserIds);
+    const tasks = withVisibleCollection(db.collection(MONGO_TASKS_COLLECTION), visibleOwnerUserIds);
+    const workloads = withVisibleCollection(db.collection(MONGO_WORKLOADS_COLLECTION), visibleOwnerUserIds);
+    const accounts = withVisibleCollection(db.collection(MONGO_ACCOUNTS_COLLECTION), visibleOwnerUserIds);
+    const contacts = withVisibleCollection(db.collection(MONGO_CONTACTS_COLLECTION), visibleOwnerUserIds);
 
     const [
       latestOpenTaskDocs,

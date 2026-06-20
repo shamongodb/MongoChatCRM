@@ -8,6 +8,11 @@ const mongoDbName = String(process.env.MONGO_DB_NAME || 'sales_data').trim();
 const accountsCollectionName = String(process.env.MONGO_ACCOUNTS_COLLECTION || 'accounts').trim();
 const workloadsCollectionName = String(process.env.MONGO_WORKLOADS_COLLECTION || 'Workloads').trim();
 const milestonesCollectionName = String(process.env.MONGO_MILESTONES_COLLECTION || 'milestones').trim();
+const TEST_USER_ID = 'google_test_milestones';
+
+function runCrmTool(name, args) {
+  return runMongoTool(name, args, { userId: TEST_USER_ID, initiatedByUserId: TEST_USER_ID });
+}
 
 if (!mongoUri) {
   test('milestone tests skipped without mongo', { skip: true }, () => {});
@@ -31,12 +36,12 @@ if (!mongoUri) {
     const client = await connectOrSkip(t);
     if (!client) return;
     try {
-      const missingName = await runMongoTool('addMilestone', {
+      const missingName = await runCrmTool('addMilestone', {
         milestoneDate: '2026-05-12'
       });
       assert.match(String(missingName.error || ''), /name is required/i);
 
-      const missingDate = await runMongoTool('addMilestone', {
+      const missingDate = await runCrmTool('addMilestone', {
         name: 'Launch prep'
       });
       assert.match(String(missingDate.error || ''), /milestoneDate/i);
@@ -61,12 +66,14 @@ if (!mongoUri) {
       await accounts.insertOne({
         _id: accountId,
         name: `Account ${runId}`,
+        ownerUserId: TEST_USER_ID,
         createdAt: nowIso,
         updatedAt: nowIso
       });
       await workloads.insertOne({
         _id: workloadId,
         name: `Workload ${runId}`,
+        ownerUserId: TEST_USER_ID,
         accountId: String(accountId),
         accountName: `Account ${runId}`,
         arr: 175000,
@@ -75,7 +82,7 @@ if (!mongoUri) {
         createdAt: nowIso,
         updatedAt: nowIso
       });
-      const out = await runMongoTool('addMilestone', {
+      const out = await runCrmTool('addMilestone', {
         name: `Milestone ${runId}`,
         milestoneDate: '2026-02',
         accountId: String(accountId),
@@ -103,7 +110,7 @@ if (!mongoUri) {
     let m1Id = null;
     let m2Id = null;
     try {
-      const created = await runMongoTool('addMilestone', {
+      const created = await runCrmTool('addMilestone', {
         name: `Delayed ${runId}`,
         milestoneDate: '2026-03-15',
         status: 'Delayed'
@@ -111,7 +118,7 @@ if (!mongoUri) {
       assert.equal(created.ok, true);
       m1Id = String(created.milestoneId);
 
-      const withNote = await runMongoTool('updateMilestone', {
+      const withNote = await runCrmTool('updateMilestone', {
         milestoneId: m1Id,
         addNote: { text: 'Initial dependency risk', author: 'QA' }
       });
@@ -120,21 +127,21 @@ if (!mongoUri) {
       assert.equal(withNote.milestone.notes.length, 1);
 
       const noteId = String(withNote.milestone.notes[0].id);
-      const edited = await runMongoTool('updateMilestone', {
+      const edited = await runCrmTool('updateMilestone', {
         milestoneId: m1Id,
         editNote: { id: noteId, text: 'Risk mitigated', author: 'QA' }
       });
       assert.equal(edited.ok, true);
       assert.equal(edited.milestone.notes[0].text, 'Risk mitigated');
 
-      const removed = await runMongoTool('updateMilestone', {
+      const removed = await runCrmTool('updateMilestone', {
         milestoneId: m1Id,
         removeNoteId: noteId
       });
       assert.equal(removed.ok, true);
       assert.equal(removed.milestone.notes.length, 0);
 
-      const createdSecond = await runMongoTool('addMilestone', {
+      const createdSecond = await runCrmTool('addMilestone', {
         name: `Completed ${runId}`,
         milestoneDate: '2026-05-20',
         status: 'Completed'
@@ -142,7 +149,7 @@ if (!mongoUri) {
       assert.equal(createdSecond.ok, true);
       m2Id = String(createdSecond.milestoneId);
 
-      const filtered = await runMongoTool('listMilestones', {
+      const filtered = await runCrmTool('listMilestones', {
         status: 'Delayed',
         from: '2026-03',
         to: '2026-04'
