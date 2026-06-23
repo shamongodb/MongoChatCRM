@@ -45,7 +45,7 @@ export function buildGraphNodes({ callModel, runMongoTool, executeGoogleTool }) 
 
     const response = await callModel(state.messages || [], state.tools || []);
     const assistantMessage = response?.choices?.[0]?.message;
-    if (!assistantMessage) throw new Error('Azure returned no assistant message');
+    if (!assistantMessage) throw new Error('Model returned no assistant message');
 
     const nextMessages = [...(state.messages || []), assistantMessage];
     return {

@@ -37,7 +37,7 @@ export function createLegacyAgentRunner({
       iterations += 1;
       const response = await callModel(messages, tools);
       const assistantMessage = response?.choices?.[0]?.message;
-      if (!assistantMessage) throw new Error('Azure returned no assistant message');
+      if (!assistantMessage) throw new Error('Model returned no assistant message');
       messages.push(assistantMessage);
 
       if (Array.isArray(assistantMessage.tool_calls) && assistantMessage.tool_calls.length) {

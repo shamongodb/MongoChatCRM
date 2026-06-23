@@ -33,6 +33,26 @@ Fill in required values in root `.env`:
 - `NODE_TO_GAS_SECRET`
 - `MONGO_URI`
 
+### LLM provider switch (Node server)
+
+The Node API uses LangChain for all chat LLM calls (agent tool calling, memory summarization, session metadata, voice rewrite). Switch providers with a single env var:
+
+```bash
+# Default: Azure OpenAI (existing behavior)
+LLM_PROVIDER=azure
+AZURE_API_KEY=...
+AZURE_ENDPOINT=...
+AZURE_OPENAI_DEPLOYMENT=...
+
+# Grok via xAI
+LLM_PROVIDER=grok
+XAI_API_KEY=...
+XAI_MODEL=grok-4.3
+XAI_REASONING_EFFORT=low
+```
+
+Restart the server after changing `LLM_PROVIDER`. Apps Script agents continue to use Azure via Script Properties.
+
 ### 2) Install dependencies
 
 ```bash

@@ -1,7 +1,8 @@
 import { ChatPromptTemplate } from '@langchain/core/prompts';
 import { RunnableSequence } from '@langchain/core/runnables';
 import { StringOutputParser } from '@langchain/core/output_parsers';
-import { AzureChatOpenAI } from '@langchain/openai';
+import { createChatModel } from '../llm/factory.js';
+import { isLlmConfigured } from '../llm/config.js';
 import {
   getSummaryState,
   getUnsummarizedMessages,
@@ -32,8 +33,7 @@ async function retryWithBackoff(fn, retries = 2) {
 }
 
 function createSummaryChain(cfg) {
-  const endpoint = cfg.azureOpenAIEndpoint || cfg.azureEndpoint;
-  if (!cfg.langchainDeployment || !cfg.azureApiKey || !endpoint) {
+  if (!isLlmConfigured(cfg)) {
     return null;
   }
   const prompt = ChatPromptTemplate.fromMessages([
@@ -46,13 +46,7 @@ function createSummaryChain(cfg) {
       'Existing summary:\n{existingSummary}\n\nNew transcript lines:\n{transcript}\n\nReturn an updated summary only.'
     ]
   ]);
-  const model = new AzureChatOpenAI({
-    azureOpenAIApiKey: cfg.azureApiKey,
-    azureOpenAIEndpoint: endpoint,
-    azureOpenAIApiDeploymentName: cfg.langchainDeployment,
-    azureOpenAIApiVersion: cfg.langchainApiVersion,
-    temperature: 0
-  });
+  const model = createChatModel(cfg, { temperature: 0 });
   return RunnableSequence.from([prompt, model, new StringOutputParser()]);
 }
 

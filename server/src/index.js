@@ -59,6 +59,7 @@ import {
   resolveCrmActor,
   stampOwnerUserId
 } from './crm-access.js';
+import { buildLlmConfig, createCallModel } from './llm/index.js';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -95,6 +96,10 @@ const {
   AZURE_OPENAI_ENDPOINT = '',
   AZURE_OPENAI_DEPLOYMENT = '',
   AZURE_OPENAI_API_VERSION = '2024-02-01',
+  LLM_PROVIDER = 'azure',
+  XAI_API_KEY = '',
+  XAI_MODEL = 'grok-4.3',
+  XAI_REASONING_EFFORT = 'low',
   CORS_ALLOWED_ORIGINS = '',
   REQUIRE_NODE_API_KEY = '',
   ELEVENLABS_API_KEY = '',
@@ -210,14 +215,8 @@ let googleToolDefsCacheTs = 0;
 let memoryCollectionsReady = false;
 let crmCollectionsReady = false;
 
-function getAzureOpenAIEndpoint() {
-  const explicit = String(AZURE_OPENAI_ENDPOINT || '').trim();
-  if (explicit) return explicit;
-  const fallback = String(AZURE_ENDPOINT || '').trim();
-  if (!fallback) return '';
-  const idx = fallback.indexOf('/openai/');
-  return idx === -1 ? fallback : fallback.slice(0, idx);
-}
+const llmConfig = buildLlmConfig(process.env);
+const callModel = createCallModel(llmConfig);
 
 const memoryConfig = {
   conversationsCollection: MONGO_CONVERSATIONS_COLLECTION,
@@ -229,11 +228,7 @@ const memoryConfig = {
   summaryThresholdMessages: Math.max(1, Number(MEMORY_SUMMARY_THRESHOLD_MESSAGES || 10)),
   summaryBatchSize: Math.max(1, Number(MEMORY_SUMMARY_BATCH_SIZE || 50)),
   summaryRetries: Math.max(0, Number(MEMORY_SUMMARY_RETRIES || 2)),
-  azureOpenAIEndpoint: getAzureOpenAIEndpoint(),
-  langchainDeployment: String(AZURE_OPENAI_DEPLOYMENT || '').trim(),
-  langchainApiVersion: String(AZURE_OPENAI_API_VERSION || '2024-02-01').trim(),
-  azureApiKey: AZURE_API_KEY,
-  azureEndpoint: AZURE_ENDPOINT
+  ...llmConfig
 };
 
 const PROFILE_ALLOWED_PATCH_KEYS = new Set([
@@ -2505,50 +2500,6 @@ function mongoToolDefinitions() {
   ];
 }
 
-function normalizeAzureMessages(messages) {
-  return (messages || []).map((m) => {
-    const out = {
-      role: m.role,
-      content: m.content == null ? '' : (typeof m.content === 'string' ? m.content : String(m.content))
-    };
-    if (m.tool_calls) out.tool_calls = m.tool_calls;
-    if (m.tool_call_id != null) out.tool_call_id = m.tool_call_id;
-    if (m.name != null) out.name = m.name;
-    return out;
-  });
-}
-
-async function callAzure(messages, tools, options = {}) {
-  if (!AZURE_API_KEY || !AZURE_ENDPOINT) {
-    throw new Error('AZURE_API_KEY and AZURE_ENDPOINT are required');
-  }
-  const payload = {
-    messages: normalizeAzureMessages(messages)
-  };
-  if (Array.isArray(tools) && tools.length) {
-    payload.tools = tools;
-    payload.tool_choice = 'auto';
-  }
-  if (options && typeof options === 'object') {
-    if (options.temperature !== undefined) payload.temperature = options.temperature;
-    if (options.max_tokens !== undefined) payload.max_tokens = options.max_tokens;
-    if (options.response_format !== undefined) payload.response_format = options.response_format;
-  }
-  const res = await fetch(AZURE_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'api-key': AZURE_API_KEY
-    },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Azure request failed (${res.status}): ${text.slice(0, 500)}`);
-  }
-  return res.json();
-}
-
 function parseSessionSummaryJson(rawContent) {
   const text = String(rawContent || '').trim();
   if (!text) return null;
@@ -2597,7 +2548,7 @@ async function generateConversationSessionMeta({ title, latestMessage }) {
     `Latest message: ${String(latestMessage || '').trim() || 'None'}`
   ].join('\n');
   try {
-    const response = await callAzure(
+    const response = await callModel(
       [
         { role: 'system', content: system },
         { role: 'user', content: user }
@@ -5255,7 +5206,7 @@ async function maybeRewriteForSpeech(text, options = {}) {
   if (!rewriteForSpeech) return source;
   if (source.length > 6000) return source;
   try {
-    const response = await callAzure(
+    const response = await callModel(
       [
         { role: 'system', content: voiceSpeechRewritePromptForMode(responseMode) },
         { role: 'user', content: source }
@@ -5326,7 +5277,7 @@ const legacyAgentRunner = createLegacyAgentRunner({
   mainSystemPrompt: MAIN_SYSTEM_PROMPT,
   fetchGoogleToolDefinitions,
   mongoToolDefinitions,
-  callModel: callAzure,
+  callModel,
   runMongoTool,
   executeGoogleTool,
   maxIterations: 10
@@ -5336,7 +5287,7 @@ const langGraphAgentRunner = createLangGraphAgentRunner({
   mainSystemPrompt: MAIN_SYSTEM_PROMPT,
   fetchGoogleToolDefinitions,
   mongoToolDefinitions,
-  callModel: callAzure,
+  callModel,
   runMongoTool,
   executeGoogleTool,
   maxIterations: 10,
