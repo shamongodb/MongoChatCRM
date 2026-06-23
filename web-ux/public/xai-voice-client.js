@@ -1,5 +1,7 @@
-const XAI_REALTIME_URL = 'wss://api.x.ai/v1/realtime?model=grok-voice-latest';
+import { formatClientSecretSubprotocol, XAI_REALTIME_WS_URL } from './xai-ws-auth.js';
+
 const SAMPLE_RATE = 24000;
+const CONNECT_TIMEOUT_MS = 15000;
 
 function float32ToBase64Pcm16(float32Array) {
   const pcm16 = new Int16Array(float32Array.length);
@@ -29,7 +31,8 @@ export function createXaiVoiceClient({
   onStatus = () => {},
   onUserTranscript = () => {},
   onAssistantTranscript = () => {},
-  onError = () => {}
+  onError = () => {},
+  shouldCancel = () => false
 } = {}) {
   let ws = null;
   let clientSecret = null;
@@ -123,7 +126,7 @@ export function createXaiVoiceClient({
         onStatus(active ? 'Listening…' : '');
         break;
       case 'error':
-        onError(event.message || 'Voice agent error');
+        onError(event.message || event.error?.message || 'Voice agent error');
         break;
       default:
         break;
@@ -133,6 +136,7 @@ export function createXaiVoiceClient({
   async function mintClientSecret() {
     const now = Math.floor(Date.now() / 1000);
     if (clientSecret && secretExpiresAt > now + 30) return clientSecret;
+
     const res = await fetch(sessionUrl('/api/voice/realtime/session'), {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -143,40 +147,107 @@ export function createXaiVoiceClient({
     try {
       data = raw ? JSON.parse(raw) : {};
     } catch (_err) {
-      throw new Error('Server returned non-JSON response for voice session.');
+      throw new Error('Voice session: server returned non-JSON. Is the API deployed?');
     }
     if (!res.ok || data.ok === false) {
-      throw new Error(data.error || `HTTP ${res.status}`);
+      const detail = data.details ? ` (${JSON.stringify(data.details).slice(0, 200)})` : '';
+      throw new Error(`${data.error || `Voice session HTTP ${res.status}`}${detail}`);
     }
     clientSecret = String(data.clientSecret || '').trim();
     secretExpiresAt = Number(data.expiresAt) || now + 300;
-    if (!clientSecret) throw new Error('Voice session response missing clientSecret');
+    if (!clientSecret) {
+      throw new Error('Voice session missing clientSecret. Set XAI_API_KEY on Vercel.');
+    }
     return clientSecret;
+  }
+
+  function connectWebSocket(secret) {
+    const subprotocol = formatClientSecretSubprotocol(secret);
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let sawSessionCreated = false;
+      const socket = new WebSocket(XAI_REALTIME_WS_URL, [subprotocol]);
+      ws = socket;
+
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try {
+          socket.close();
+        } catch (_err) {
+          // ignore
+        }
+        reject(new Error('Voice WebSocket timed out waiting for xAI (15s)'));
+      }, CONNECT_TIMEOUT_MS);
+
+      const fail = (message) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        reject(new Error(message));
+      };
+
+      const succeed = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve();
+      };
+
+      socket.onopen = () => {
+        // Wait for session.created before considering the connection ready.
+      };
+
+      socket.onerror = () => {
+        // onclose follows with code/reason in most browsers.
+      };
+
+      socket.onclose = (ev) => {
+        if (socket === ws) ws = null;
+        if (settled) {
+          if (active) onError(`Voice connection closed (${ev.code})`);
+          return;
+        }
+        const reason = String(ev.reason || '').trim();
+        const hint = ev.code === 1006
+          ? ' — check ad blockers, confirm XAI_API_KEY on Vercel'
+          : '';
+        fail(
+          `Voice WebSocket connection failed (${ev.code}${reason ? `: ${reason}` : ''})${hint}`
+        );
+      };
+
+      socket.onmessage = (msg) => {
+        try {
+          const event = JSON.parse(msg.data);
+          if (event.type === 'session.created' && !sawSessionCreated) {
+            sawSessionCreated = true;
+            succeed();
+          }
+          if (event.type === 'error' && !sawSessionCreated) {
+            fail(event.message || event.error?.message || 'xAI voice session error');
+            return;
+          }
+          handleServerEvent(event);
+        } catch (err) {
+          onError(err.message || String(err));
+        }
+      };
+    });
   }
 
   async function ensureConnected() {
     if (ws && ws.readyState === WebSocket.OPEN) return;
     if (connectPromise) return connectPromise;
+
     connectPromise = (async () => {
+      clientSecret = null;
       const secret = await mintClientSecret();
-      await new Promise((resolve, reject) => {
-        const socket = new WebSocket(XAI_REALTIME_URL, [`xai-client-secret.${secret}`]);
-        ws = socket;
-        socket.onopen = () => resolve();
-        socket.onerror = () => reject(new Error('Voice WebSocket connection failed'));
-        socket.onclose = (ev) => {
-          if (socket === ws) ws = null;
-          if (active) onError(`Voice connection closed (${ev.code})`);
-        };
-        socket.onmessage = (msg) => {
-          try {
-            handleServerEvent(JSON.parse(msg.data));
-          } catch (err) {
-            onError(err.message || String(err));
-          }
-        };
-      });
+      if (shouldCancel()) throw new Error('Voice start canceled');
+      await connectWebSocket(secret);
     })();
+
     try {
       await connectPromise;
     } finally {
@@ -246,13 +317,20 @@ export function createXaiVoiceClient({
       if (active) return;
       onStatus('Connecting…');
       await ensureConnected();
+      if (shouldCancel()) {
+        await this.stop();
+        return;
+      }
       active = true;
       assistantTranscriptBuffer = '';
       await startMicCapture();
       onStatus('Listening…');
     },
     async stop() {
-      if (!active) return;
+      if (!active && (!ws || ws.readyState !== WebSocket.OPEN)) {
+        stopMicCapture();
+        return;
+      }
       active = false;
       stopMicCapture();
       stopPlayback();

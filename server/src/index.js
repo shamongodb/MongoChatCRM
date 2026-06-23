@@ -5429,9 +5429,11 @@ app.post('/api/voice/realtime/session', requireEndUserAuth, async (req, res) => 
     return jsonOk(res, {
       clientSecret: out.clientSecret,
       expiresAt: out.expiresAt,
-      model: 'grok-voice-latest'
+      model: 'grok-voice-latest',
+      mcpPublicUrl
     });
   } catch (err) {
+    console.error('[voice/realtime/session]', err?.message || err);
     return jsonErr(res, err.message || String(err), 502);
   }
 });

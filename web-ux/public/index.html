@@ -90,11 +90,19 @@
         <div id="chatSessionList" class="chat-sessions"></div>
         <div id="chatMessages" class="chat-messages"></div>
         <div class="chat-input-wrap">
-          <input id="chatInput" type="text" placeholder="Message (hold mic or ⌘⇧1 to speak)">
-          <button id="chatMicBtn" class="chat-mic-btn" type="button" aria-label="Hold to speak" aria-pressed="false" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
-            </svg>
+          <input id="chatInput" type="text" placeholder="Message (tap mic or ⌘⇧1 to speak)">
+          <button id="chatMicBtn" class="chat-mic-btn" type="button" aria-label="Start voice" aria-pressed="false" hidden>
+            <span class="chat-mic-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
+              </svg>
+            </span>
+            <span class="chat-mic-stop-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <rect x="7" y="7" width="10" height="10" rx="1.5"/>
+              </svg>
+            </span>
+            <span class="chat-mic-label">Stop</span>
           </button>
           <button id="chatSendBtn" aria-label="Send message">
             <svg viewBox="0 0 24 24" aria-hidden="true">

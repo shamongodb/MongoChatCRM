@@ -25,8 +25,7 @@ const RESPONSE_MODE_VOICE_WHIMSICAL = 'voice_whimsical';
 const VOICE_STYLE_TAG_PREFIX = /^\s*\[(voice_friendly|voice_conversational|voice_whimsical|whimsical)\]\s*/i;
 const TASK_LIST_FILTERS_STORAGE_KEY = 'webUxTaskListHiddenIds';
 
-let voiceShortcutHeld = false;
-let voiceMicPointerHeld = false;
+let voiceSessionStarting = false;
 let voiceCancelStart = false;
 let voiceSessionActive = false;
 let xaiVoiceClient = null;
@@ -136,8 +135,8 @@ function setMobileChatOpen(open) {
 function updateChatInputPlaceholder() {
   if (!chatInputEl) return;
   chatInputEl.placeholder = isMobileLayout()
-    ? 'Message (hold mic to speak)'
-    : 'Message (hold mic or ⌘⇧1 to speak)';
+    ? 'Message (tap mic to speak)'
+    : 'Message (tap mic or ⌘⇧1 to speak)';
 }
 
 function isVoiceInputSupported() {
@@ -153,7 +152,8 @@ function updateVoiceRecordingUi(isRecording) {
   chatInputWrapEl?.classList.toggle('is-recording', isRecording);
   if (chatMicBtnEl) {
     chatMicBtnEl.setAttribute('aria-pressed', isRecording ? 'true' : 'false');
-    chatMicBtnEl.setAttribute('aria-label', isRecording ? 'Stop voice' : 'Hold to speak');
+    chatMicBtnEl.setAttribute('aria-label', isRecording ? 'Stop voice' : 'Start voice');
+    chatMicBtnEl.title = isRecording ? 'Stop voice' : 'Start voice';
   }
   if (chatInputEl) {
     chatInputEl.disabled = isRecording;
@@ -1315,6 +1315,7 @@ function getXaiVoiceClient() {
   xaiVoiceClient = createXaiVoiceClient({
     apiBaseUrl: state.apiBaseUrl,
     authHeaders: (extra = {}) => authHeaders(extra),
+    shouldCancel: () => voiceCancelStart,
     onStatus: (text) => setStatus(text),
     onUserTranscript: (text) => appendVoiceChatMessage('user', text),
     onAssistantTranscript: (text) => appendVoiceChatMessage('assistant', text),
@@ -1344,7 +1345,7 @@ function isVoiceChordReleaseKey(event) {
 }
 
 async function startVoiceSession() {
-  if (voiceSessionActive) return;
+  if (voiceSessionActive || voiceSessionStarting) return;
   try {
     ensureSignedIn();
   } catch (err) {
@@ -1356,6 +1357,8 @@ async function startVoiceSession() {
     return;
   }
   voiceCancelStart = false;
+  voiceSessionStarting = true;
+  updateVoiceRecordingUi(true);
   try {
     await getXaiVoiceClient().start();
     if (voiceCancelStart) {
@@ -1363,17 +1366,24 @@ async function startVoiceSession() {
       return;
     }
     voiceSessionActive = true;
-    updateVoiceRecordingUi(true);
   } catch (err) {
     voiceSessionActive = false;
     updateVoiceRecordingUi(false);
     setStatus(err.message || String(err));
+  } finally {
+    voiceSessionStarting = false;
+    if (!voiceSessionActive) updateVoiceRecordingUi(false);
   }
 }
 
 async function stopVoiceSession() {
-  if (!voiceSessionActive && (!xaiVoiceClient || !xaiVoiceClient.isActive)) return;
+  voiceCancelStart = true;
+  if (!voiceSessionActive && !voiceSessionStarting && (!xaiVoiceClient || !xaiVoiceClient.isActive)) {
+    updateVoiceRecordingUi(false);
+    return;
+  }
   voiceSessionActive = false;
+  voiceSessionStarting = false;
   updateVoiceRecordingUi(false);
   try {
     if (xaiVoiceClient) await xaiVoiceClient.stop();
@@ -1383,59 +1393,25 @@ async function stopVoiceSession() {
   setStatus('');
 }
 
+async function toggleVoiceSession() {
+  if (voiceSessionActive || voiceSessionStarting || (xaiVoiceClient && xaiVoiceClient.isActive)) {
+    await stopVoiceSession();
+    return;
+  }
+  await startVoiceSession();
+}
+
 function onVoiceKeyDown(event) {
   if (!isVoicePushToTalkShortcut(event)) return;
   if (event.repeat) return;
   event.preventDefault();
-  voiceShortcutHeld = true;
-  startVoiceSession();
+  toggleVoiceSession();
 }
 
-function onVoiceKeyUp(event) {
-  if (!isVoiceChordReleaseKey(event)) return;
-  const inVoiceSession = voiceShortcutHeld || voiceSessionActive;
-  if (!inVoiceSession) return;
-  voiceShortcutHeld = false;
-  event.preventDefault();
-  if (!voiceSessionActive) {
-    voiceCancelStart = true;
-    return;
-  }
-  stopVoiceSession();
-}
-
-function onChatMicPointerDown(event) {
+function onChatMicClick(event) {
   if (event.pointerType === 'mouse' && event.button !== 0) return;
   event.preventDefault();
-  chatMicBtnEl?.setPointerCapture?.(event.pointerId);
-  voiceMicPointerHeld = true;
-  startVoiceSession();
-}
-
-function onChatMicPointerUp(event) {
-  if (!voiceMicPointerHeld) return;
-  voiceMicPointerHeld = false;
-  if (chatMicBtnEl?.hasPointerCapture?.(event.pointerId)) {
-    chatMicBtnEl.releasePointerCapture(event.pointerId);
-  }
-  if (!voiceSessionActive) {
-    voiceCancelStart = true;
-    return;
-  }
-  stopVoiceSession();
-}
-
-function onChatMicPointerLeave(event) {
-  if (!voiceMicPointerHeld) return;
-  voiceMicPointerHeld = false;
-  if (chatMicBtnEl?.hasPointerCapture?.(event.pointerId)) {
-    chatMicBtnEl.releasePointerCapture(event.pointerId);
-  }
-  if (!voiceSessionActive) {
-    voiceCancelStart = true;
-    return;
-  }
-  stopVoiceSession();
+  toggleVoiceSession();
 }
 
 function setupChatMicBtn() {
@@ -1446,10 +1422,7 @@ function setupChatMicBtn() {
     return;
   }
   chatMicBtnEl.hidden = false;
-  chatMicBtnEl.addEventListener('pointerdown', onChatMicPointerDown);
-  chatMicBtnEl.addEventListener('pointerup', onChatMicPointerUp);
-  chatMicBtnEl.addEventListener('pointercancel', onChatMicPointerUp);
-  chatMicBtnEl.addEventListener('pointerleave', onChatMicPointerLeave);
+  chatMicBtnEl.addEventListener('click', onChatMicClick);
 }
 
 function cardHtml(title, body, meta = '') {
@@ -3033,15 +3006,8 @@ if (signOutBtnEl) {
 }
 
 window.addEventListener('keydown', onVoiceKeyDown, true);
-window.addEventListener('keyup', onVoiceKeyUp, true);
 window.addEventListener('blur', () => {
-  if (!voiceShortcutHeld && !voiceSessionActive && !voiceMicPointerHeld) return;
-  voiceShortcutHeld = false;
-  voiceMicPointerHeld = false;
-  if (!voiceSessionActive) {
-    voiceCancelStart = true;
-    return;
-  }
+  if (!voiceSessionActive && !voiceSessionStarting) return;
   stopVoiceSession();
 });
 

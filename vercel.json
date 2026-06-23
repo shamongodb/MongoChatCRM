@@ -33,6 +33,14 @@
       "destination": "/app.js"
     },
     {
+      "source": "/xai-voice-client.js",
+      "destination": "/xai-voice-client.js"
+    },
+    {
+      "source": "/xai-ws-auth.js",
+      "destination": "/xai-ws-auth.js"
+    },
+    {
       "source": "/styles.css",
       "destination": "/styles.css"
     },
