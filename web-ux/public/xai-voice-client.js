@@ -29,8 +29,11 @@ export function createXaiVoiceClient({
   apiBaseUrl = '',
   authHeaders,
   onStatus = () => {},
-  onUserTranscript = () => {},
-  onAssistantTranscript = () => {},
+  onUserTurnStart = () => {},
+  onUserTranscriptUpdate = () => {},
+  onUserTurnEnd = () => {},
+  onAssistantTranscriptUpdate = () => {},
+  onAssistantTranscriptDone = () => {},
   onError = () => {},
   shouldCancel = () => false
 } = {}) {
@@ -46,6 +49,13 @@ export function createXaiVoiceClient({
   let playbackTime = 0;
   let assistantTranscriptBuffer = '';
   let connectPromise = null;
+  let userTurnFinalized = false;
+
+  function finalizeUserTurn() {
+    if (userTurnFinalized) return;
+    userTurnFinalized = true;
+    onUserTurnEnd();
+  }
 
   function sessionUrl(pathname) {
     const base = String(apiBaseUrl || '').replace(/\/+$/, '');
@@ -94,26 +104,44 @@ export function createXaiVoiceClient({
       case 'input_audio_buffer.speech_started':
         sendJson({ type: 'response.cancel' });
         stopPlayback();
+        userTurnFinalized = false;
+        onUserTurnStart();
         onStatus('Listening…');
         break;
+      case 'input_audio_buffer.speech_stopped':
+        finalizeUserTurn();
+        onStatus('Thinking…');
+        break;
+      case 'conversation.item.input_audio_transcription.updated': {
+        const text = String(event.transcript || '').trim();
+        if (text) onUserTranscriptUpdate(text);
+        break;
+      }
       case 'conversation.item.input_audio_transcription.completed': {
         const text = String(event.transcript || '').trim();
-        if (text) onUserTranscript(text);
+        if (text) onUserTranscriptUpdate(text);
         break;
       }
       case 'response.output_audio.delta':
+        finalizeUserTurn();
         enqueuePcmPlayback(event.delta);
         break;
       case 'response.output_audio_transcript.delta':
+        finalizeUserTurn();
         assistantTranscriptBuffer += String(event.delta || '');
+        if (assistantTranscriptBuffer.trim()) {
+          onAssistantTranscriptUpdate(assistantTranscriptBuffer.trim());
+        }
         break;
       case 'response.output_audio_transcript.done': {
         const text = String(event.transcript || assistantTranscriptBuffer || '').trim();
         assistantTranscriptBuffer = '';
-        if (text) onAssistantTranscript(text);
+        if (text) onAssistantTranscriptUpdate(text);
+        onAssistantTranscriptDone(text);
         break;
       }
       case 'response.mcp_call.in_progress':
+        finalizeUserTurn();
         onStatus('Using CRM tools…');
         break;
       case 'response.mcp_call.completed':

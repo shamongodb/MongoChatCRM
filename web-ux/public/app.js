@@ -28,6 +28,9 @@ const TASK_LIST_FILTERS_STORAGE_KEY = 'webUxTaskListHiddenIds';
 let voiceSessionStarting = false;
 let voiceCancelStart = false;
 let voiceSessionActive = false;
+let voiceUserDraftIndex = -1;
+let voiceAssistantDraftIndex = -1;
+let voiceLastFinalizedUserIndex = -1;
 let xaiVoiceClient = null;
 const CONTACT_DEFAULT_TABLE_COLUMNS = Object.freeze(['name', 'email', 'title']);
 const INITIATIVE_WORKLOAD_PALETTES = Object.freeze([
@@ -1301,13 +1304,111 @@ function ensureConversationId() {
   return state.currentConversationId;
 }
 
-function appendVoiceChatMessage(role, content) {
-  const text = String(content || '').trim();
-  if (!text) return;
+function ensureVoiceUserDraft() {
   ensureSignedIn();
   ensureConversationId();
-  state.chatMessages.push({ role, content: text });
+  if (
+    voiceUserDraftIndex >= 0 &&
+    voiceUserDraftIndex < state.chatMessages.length &&
+    state.chatMessages[voiceUserDraftIndex]?.role === 'user' &&
+    state.chatMessages[voiceUserDraftIndex]?.draft
+  ) {
+    return;
+  }
+  voiceUserDraftIndex = state.chatMessages.length;
+  state.chatMessages.push({ role: 'user', content: '', draft: true });
   renderChatMessages();
+}
+
+function updateVoiceUserDraft(text) {
+  const content = String(text || '').trim();
+  if (!content) return;
+  if (voiceUserDraftIndex >= 0 && voiceUserDraftIndex < state.chatMessages.length) {
+    const msg = state.chatMessages[voiceUserDraftIndex];
+    if (msg?.draft) {
+      msg.content = content;
+      renderChatMessages();
+      return;
+    }
+  }
+  if (
+    voiceLastFinalizedUserIndex >= 0 &&
+    voiceLastFinalizedUserIndex < state.chatMessages.length
+  ) {
+    const msg = state.chatMessages[voiceLastFinalizedUserIndex];
+    if (msg?.role === 'user' && !msg.draft) {
+      msg.content = content;
+      renderChatMessages();
+      return;
+    }
+  }
+  ensureVoiceUserDraft();
+  const msg = state.chatMessages[voiceUserDraftIndex];
+  if (!msg) return;
+  msg.content = content;
+  renderChatMessages();
+}
+
+function finalizeVoiceUserDraft() {
+  if (voiceUserDraftIndex < 0) return;
+  const index = voiceUserDraftIndex;
+  voiceUserDraftIndex = -1;
+  const msg = state.chatMessages[index];
+  if (!msg || !String(msg.content || '').trim()) {
+    state.chatMessages.splice(index, 1);
+    if (voiceAssistantDraftIndex > index) voiceAssistantDraftIndex -= 1;
+    if (voiceLastFinalizedUserIndex > index) voiceLastFinalizedUserIndex -= 1;
+  } else {
+    delete msg.draft;
+    voiceLastFinalizedUserIndex = index;
+  }
+  renderChatMessages();
+}
+
+function ensureVoiceAssistantDraft() {
+  finalizeVoiceUserDraft();
+  ensureSignedIn();
+  ensureConversationId();
+  if (
+    voiceAssistantDraftIndex >= 0 &&
+    voiceAssistantDraftIndex < state.chatMessages.length &&
+    state.chatMessages[voiceAssistantDraftIndex]?.role === 'assistant' &&
+    state.chatMessages[voiceAssistantDraftIndex]?.draft
+  ) {
+    return;
+  }
+  voiceAssistantDraftIndex = state.chatMessages.length;
+  state.chatMessages.push({ role: 'assistant', content: '', draft: true });
+  renderChatMessages();
+}
+
+function updateVoiceAssistantDraft(text) {
+  const content = String(text || '').trim();
+  if (!content) return;
+  ensureVoiceAssistantDraft();
+  const msg = state.chatMessages[voiceAssistantDraftIndex];
+  if (!msg) return;
+  msg.content = content;
+  renderChatMessages();
+}
+
+function finalizeVoiceAssistantDraft() {
+  if (voiceAssistantDraftIndex < 0) return;
+  const index = voiceAssistantDraftIndex;
+  voiceAssistantDraftIndex = -1;
+  const msg = state.chatMessages[index];
+  if (!msg || !String(msg.content || '').trim()) {
+    state.chatMessages.splice(index, 1);
+  } else {
+    delete msg.draft;
+  }
+  renderChatMessages();
+}
+
+function resetVoiceDrafts() {
+  finalizeVoiceUserDraft();
+  finalizeVoiceAssistantDraft();
+  voiceLastFinalizedUserIndex = -1;
 }
 
 function getXaiVoiceClient() {
@@ -1317,8 +1418,14 @@ function getXaiVoiceClient() {
     authHeaders: (extra = {}) => authHeaders(extra),
     shouldCancel: () => voiceCancelStart,
     onStatus: (text) => setStatus(text),
-    onUserTranscript: (text) => appendVoiceChatMessage('user', text),
-    onAssistantTranscript: (text) => appendVoiceChatMessage('assistant', text),
+    onUserTurnStart: () => {
+      finalizeVoiceAssistantDraft();
+      voiceLastFinalizedUserIndex = -1;
+    },
+    onUserTranscriptUpdate: (text) => updateVoiceUserDraft(text),
+    onUserTurnEnd: () => finalizeVoiceUserDraft(),
+    onAssistantTranscriptUpdate: (text) => updateVoiceAssistantDraft(text),
+    onAssistantTranscriptDone: () => finalizeVoiceAssistantDraft(),
     onError: (message) => setStatus(message || 'Voice error')
   });
   return xaiVoiceClient;
@@ -1385,6 +1492,7 @@ async function stopVoiceSession() {
   voiceSessionActive = false;
   voiceSessionStarting = false;
   updateVoiceRecordingUi(false);
+  resetVoiceDrafts();
   try {
     if (xaiVoiceClient) await xaiVoiceClient.stop();
   } catch (err) {
@@ -2687,7 +2795,8 @@ function renderChatMessages() {
   chatMessagesEl.innerHTML = '';
   for (const msg of state.chatMessages) {
     const div = document.createElement('div');
-    div.className = `msg ${msg.role === 'user' ? 'user' : 'assistant'}`;
+    const roleClass = msg.role === 'user' ? 'user' : 'assistant';
+    div.className = `msg ${roleClass}${msg.draft ? ' draft' : ''}`;
     div.innerHTML = escapeHtml(msg.content || '').replace(/\n/g, '<br>');
     chatMessagesEl.appendChild(div);
   }
