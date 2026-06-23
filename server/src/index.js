@@ -918,6 +918,61 @@ function buildTaskListOwnerOrNameFilter(ownerArg) {
   return { $or: [{ owner: rx }, { name: rx }] };
 }
 
+function parseTaskListRefArg(taskListIdRaw) {
+  const text = String(taskListIdRaw || '').trim();
+  if (!text) return { objectId: null, alternateName: null };
+  const objectId = toObjectId(text);
+  if (objectId) return { objectId, alternateName: null };
+  return { objectId: null, alternateName: text };
+}
+
+async function resolveTaskListRow(taskLists, { taskListId, taskListName } = {}) {
+  const idRef = parseTaskListRefArg(taskListId);
+  const explicitName = String(taskListName || '').trim();
+  const nameCandidate = explicitName || idRef.alternateName || '';
+
+  if (idRef.objectId) {
+    const row = await taskLists.findOne({ _id: idRef.objectId });
+    if (row) return { ok: true, row, listId: idRef.objectId };
+  }
+
+  if (nameCandidate) {
+    const escaped = escapeRegExp(nameCandidate);
+    const matches = await taskLists
+      .find({ name: { $regex: `^${escaped}$`, $options: 'i' } })
+      .sort({ updatedAt: -1 })
+      .limit(6)
+      .toArray();
+    if (matches.length === 1) {
+      const row = matches[0];
+      return { ok: true, row, listId: row._id };
+    }
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        error: `Multiple task lists match "${nameCandidate}". Pass taskListId from createTaskList.`,
+        needsDisambiguation: true,
+        candidates: matches.slice(0, 5).map((row) => ({
+          taskListId: String(row._id),
+          name: String(row.name || ''),
+          updatedAt: row.updatedAt ? String(row.updatedAt) : null
+        }))
+      };
+    }
+  }
+
+  if (idRef.objectId) {
+    return {
+      ok: false,
+      error: 'Task list not found. Use the taskListId returned by createTaskList, or pass taskListName.'
+    };
+  }
+  if (nameCandidate) {
+    return { ok: false, error: `Task list not found for name "${nameCandidate}".` };
+  }
+  return { ok: false, error: 'taskListId or taskListName is required' };
+}
+
 const TASK_ALLOWED_STATUSES = new Set(['open', 'in_progress', 'blocked', 'done']);
 const TASK_ALLOWED_PRIORITIES = new Set(['Priority 1', 'Priority 2', 'Priority 3', 'Priority 4']);
 
@@ -1513,7 +1568,8 @@ function mongoToolDefinitions() {
       type: 'function',
       function: {
         name: 'createTaskList',
-        description: 'Create a MongoDB task list document. A list is the parent container for tasks.',
+        description:
+          'Create a MongoDB task list document. A list is the parent container for tasks. Returns taskListId — pass that exact value to addTaskToList.',
         parameters: {
           type: 'object',
           properties: {
@@ -1549,11 +1605,19 @@ function mongoToolDefinitions() {
       type: 'function',
       function: {
         name: 'addTaskToList',
-        description: 'Add one task document linked to a task list by taskListId.',
+        description:
+          'Add one task document linked to a task list. Prefer taskListId from createTaskList; taskListName is accepted when the id is unknown.',
         parameters: {
           type: 'object',
           properties: {
-            taskListId: { type: 'string', description: 'Task list ObjectId string.' },
+            taskListId: {
+              type: 'string',
+              description: 'Task list ObjectId from createTaskList. If omitted, provide taskListName.'
+            },
+            taskListName: {
+              type: 'string',
+              description: 'Exact task list name when taskListId is unavailable (e.g. right after createTaskList).'
+            },
             task: { type: 'string', description: 'Task text.' },
             status: { type: 'string', description: 'Optional task status: open, in_progress, blocked, done. Defaults to open.' },
             owner: { type: 'string', description: 'Optional task owner/assignee. Independent from task list owner.' },
@@ -1582,7 +1646,7 @@ function mongoToolDefinitions() {
               }
             }
           },
-          required: ['taskListId', 'task']
+          required: ['task']
         }
       }
     },
@@ -2860,25 +2924,40 @@ function normalizeMilestoneForRead(rawMilestone) {
 }
 
 async function handleTaskMongoTool(name, args, context) {
-  const { taskLists, tasks, sessionOptions } = context;
+  const { taskLists, tasks, sessionOptions, crmActorUserId } = context;
 
   if (name === 'createTaskList') {
-    const doc = {
-      name: String(args.name || '').trim(),
-      owner: args.owner ? String(args.owner).trim() : null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+    const doc = stampOwnerUserId(
+      {
+        name: String(args.name || '').trim(),
+        owner: args.owner ? String(args.owner).trim() : null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      crmActorUserId
+    );
     if (!doc.name) return { error: 'name is required' };
     const result = await taskLists.insertOne(doc);
-    return { ok: true, taskListId: String(result.insertedId), taskList: { ...doc, _id: String(result.insertedId) } };
+    const listId = String(result.insertedId);
+    return {
+      ok: true,
+      taskListId: listId,
+      taskList: {
+        ...doc,
+        _id: listId,
+        ownerUserId: doc.ownerUserId || crmActorUserId || null
+      }
+    };
   }
 
   if (name === 'updateTaskList') {
-    const _id = toObjectId(args.taskListId);
-    if (!_id) return { error: 'Invalid taskListId' };
-    const existing = await taskLists.findOne({ _id });
-    if (!existing) return { error: 'Task list not found' };
+    const resolved = await resolveTaskListRow(taskLists, {
+      taskListId: args.taskListId,
+      taskListName: args.taskListName
+    });
+    if (!resolved.ok) return resolved;
+    const _id = resolved.listId;
+    const existing = resolved.row;
 
     const hasName = Object.prototype.hasOwnProperty.call(args, 'name');
     const hasOwner = Object.prototype.hasOwnProperty.call(args, 'owner');
@@ -2923,10 +3002,12 @@ async function handleTaskMongoTool(name, args, context) {
   }
 
   if (name === 'getTaskList') {
-    const _id = toObjectId(args.taskListId);
-    if (!_id) return { error: 'Invalid taskListId' };
-    const row = await taskLists.findOne({ _id });
-    if (!row) return { error: 'Task list not found' };
+    const resolved = await resolveTaskListRow(taskLists, {
+      taskListId: args.taskListId,
+      taskListName: args.taskListName
+    });
+    if (!resolved.ok) return resolved;
+    const row = resolved.row;
     const listId = String(row._id);
     const listTasks = await tasks.find({ taskListId: listId }).sort({ updatedAt: -1 }).toArray();
     return attachTasksToTaskList(row, listTasks.map(normalizeTaskForRead));
@@ -2984,8 +3065,12 @@ async function handleTaskMongoTool(name, args, context) {
   }
 
   if (name === 'deleteTaskList') {
-    const _id = toObjectId(args.taskListId);
-    if (!_id) return { error: 'Invalid taskListId' };
+    const resolved = await resolveTaskListRow(taskLists, {
+      taskListId: args.taskListId,
+      taskListName: args.taskListName
+    });
+    if (!resolved.ok) return resolved;
+    const _id = resolved.listId;
     if (args.confirm !== true) {
       return { error: 'Confirmation required: re-run deleteTaskList with confirm=true after the user explicitly confirms permanent deletion.' };
     }
@@ -2998,10 +3083,13 @@ async function handleTaskMongoTool(name, args, context) {
   }
 
   if (name === 'addTaskToList') {
-    const _id = toObjectId(args.taskListId);
-    if (!_id) return { error: 'Invalid taskListId' };
-    const list = await taskLists.findOne({ _id });
-    if (!list) return { error: 'Task list not found' };
+    const resolved = await resolveTaskListRow(taskLists, {
+      taskListId: args.taskListId,
+      taskListName: args.taskListName
+    });
+    if (!resolved.ok) return resolved;
+    const list = resolved.row;
+    const _id = resolved.listId;
     const task = String(args.task || '').trim();
     const rawStatus = String(args.status || '').trim();
     const status = rawStatus || 'open';
@@ -3019,21 +3107,24 @@ async function handleTaskMongoTool(name, args, context) {
     if (taskLinksResult.error) return { error: taskLinksResult.error };
     const nowIso = new Date().toISOString();
     const taskObjectId = new ObjectId();
-    const taskRow = {
-      _id: taskObjectId,
-      taskId: String(taskObjectId),
-      taskListId: String(_id),
-      taskListName: list.name ? String(list.name) : null,
-      task,
-      status,
-      owner: owner || null,
-      dueDate: args.dueDate ? String(args.dueDate) : null,
-      accountId: args.accountId ? String(args.accountId) : null,
-      workloadId: args.workloadId ? String(args.workloadId) : null,
-      documentLinks: taskLinksResult.links ?? [],
-      createdAt: nowIso,
-      updatedAt: nowIso
-    };
+    const taskRow = stampOwnerUserId(
+      {
+        _id: taskObjectId,
+        taskId: String(taskObjectId),
+        taskListId: String(_id),
+        taskListName: list.name ? String(list.name) : null,
+        task,
+        status,
+        owner: owner || null,
+        dueDate: args.dueDate ? String(args.dueDate) : null,
+        accountId: args.accountId ? String(args.accountId) : null,
+        workloadId: args.workloadId ? String(args.workloadId) : null,
+        documentLinks: taskLinksResult.links ?? [],
+        createdAt: nowIso,
+        updatedAt: nowIso
+      },
+      crmActorUserId
+    );
     if (priority) taskRow.priority = priority;
     if (person) taskRow.person = person;
     await tasks.insertOne(taskRow);
@@ -3042,14 +3133,23 @@ async function handleTaskMongoTool(name, args, context) {
   }
 
   if (name === 'updateTaskInList') {
-    const taskListIdArg = String(args.taskListId || '').trim();
-    const hasTaskListArg = taskListIdArg.length > 0;
-    const _id = hasTaskListArg ? toObjectId(taskListIdArg) : null;
-    if (hasTaskListArg && !_id) return { error: 'Invalid taskListId' };
+    const hasTaskListArg = !!(
+      String(args.taskListId || '').trim() ||
+      String(args.taskListName || '').trim()
+    );
+    let _id = null;
+    if (hasTaskListArg) {
+      const resolved = await resolveTaskListRow(taskLists, {
+        taskListId: args.taskListId,
+        taskListName: args.taskListName
+      });
+      if (!resolved.ok) return resolved;
+      _id = resolved.listId;
+    }
     const taskId = String(args.taskId || '').trim();
     const taskText = normalizeSearchText(args.taskText);
     if (!taskId && !taskText) return { error: 'taskId or taskText is required' };
-    if (!taskId && !_id) return { error: 'taskListId is required when using taskText' };
+    if (!taskId && !_id) return { error: 'taskListId or taskListName is required when using taskText' };
     if (args.documentLinks !== undefined && args.addDocumentLinks !== undefined) {
       return { error: 'Provide either documentLinks or addDocumentLinks, not both' };
     }
@@ -4128,7 +4228,13 @@ async function runMongoTool(name, args, _toolContext = {}) {
   const initiatives = withVisibleCollection(withAuditedCollection(db.collection(MONGO_INITIATIVES_COLLECTION), auditActorId), visibleOwnerUserIds);
   const sessionOptions = (session) => (session ? { session } : undefined);
 
-  const taskToolResult = await handleTaskMongoTool(name, args, { taskLists, tasks, sessionOptions, visibleOwnerUserIds });
+  const taskToolResult = await handleTaskMongoTool(name, args, {
+    taskLists,
+    tasks,
+    sessionOptions,
+    visibleOwnerUserIds,
+    crmActorUserId
+  });
   if (taskToolResult !== undefined) return taskToolResult;
 
   const userProfileToolResult = await handleUserProfileMongoTool(name, args, { db, toolContext: _toolContext });

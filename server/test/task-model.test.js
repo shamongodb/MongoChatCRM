@@ -31,6 +31,43 @@ if (!mongoUri) {
     await closeMongoClientConnection();
   });
 
+  test('addTaskToList resolves a list by taskListName after createTaskList', async (t) => {
+    const client = await connectMongoOrSkip(t);
+    if (!client) return;
+    const db = client.db(mongoDbName);
+    const taskLists = db.collection(taskListsCollectionName);
+    const tasks = db.collection(tasksCollectionName);
+    const runId = `task-name-resolve-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    const listName = `Voice List ${runId}`;
+
+    let taskListId = null;
+    try {
+      const created = await runCrmTool('createTaskList', { name: listName });
+      assert.equal(created.ok, true);
+      taskListId = String(created.taskListId);
+
+      const added = await runCrmTool('addTaskToList', {
+        taskListName: listName,
+        task: `Follow up ${runId}`
+      });
+      assert.equal(added.ok, true);
+      assert.equal(added.task.taskListId, taskListId);
+
+      const addedByNameInIdField = await runCrmTool('addTaskToList', {
+        taskListId: listName,
+        task: `Second item ${runId}`
+      });
+      assert.equal(addedByNameInIdField.ok, true);
+      assert.equal(addedByNameInIdField.task.taskListId, taskListId);
+    } finally {
+      if (taskListId) {
+        await tasks.deleteMany({ taskListId });
+        await taskLists.deleteOne({ _id: new ObjectId(taskListId) });
+      }
+      await client.close();
+    }
+  });
+
   test('addTaskToList writes standalone task docs and getTaskList returns them', async (t) => {
     const client = await connectMongoOrSkip(t);
     if (!client) return;
