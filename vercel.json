@@ -7,11 +7,19 @@
       "maxDuration": 300,
       "memory": 1024
     },
+    "api/mcp.js": {
+      "maxDuration": 300,
+      "memory": 1024
+    },
     "api/config.js": {
       "maxDuration": 10
     }
   },
   "rewrites": [
+    {
+      "source": "/mcp",
+      "destination": "/api/mcp"
+    },
     {
       "source": "/api/(.*)",
       "destination": "/api/index"

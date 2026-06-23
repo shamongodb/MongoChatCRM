@@ -60,6 +60,8 @@ import {
   stampOwnerUserId
 } from './crm-access.js';
 import { buildLlmConfig, createCallModel } from './llm/index.js';
+import { handleMcpHttpRequest } from './mcp/http-handler.js';
+import { mintXaiRealtimeClientSecret, resolveMcpPublicUrl } from './mcp/session-config.js';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -5394,6 +5396,46 @@ function formatElevenLabsErrorMessage(data, rawText) {
   return slice || 'Unknown error';
 }
 
+app.post('/mcp', async (req, res) => {
+  try {
+    await handleMcpHttpRequest(req, res, {
+      mongoToolDefinitions,
+      runMongoTool,
+      ensureAppReady
+    });
+  } catch (err) {
+    if (!res.headersSent) {
+      return jsonErr(res, err.message || String(err), 500);
+    }
+  }
+});
+
+app.post('/api/voice/realtime/session', requireEndUserAuth, async (req, res) => {
+  try {
+    const xaiApiKey = String(XAI_API_KEY || '').trim();
+    if (!xaiApiKey) {
+      return jsonErr(res, 'Voice realtime is not configured (missing XAI_API_KEY)', 503);
+    }
+    const mcpPublicUrl = resolveMcpPublicUrl(req);
+    if (!mcpPublicUrl) {
+      return jsonErr(res, 'MCP_PUBLIC_URL is required (or send Host header)', 503);
+    }
+    const expiresSeconds = Math.min(3600, Math.max(60, Number(req.body?.expiresSeconds) || 300));
+    const out = await mintXaiRealtimeClientSecret({
+      userId: req.auth.userId,
+      mcpPublicUrl,
+      expiresSeconds
+    });
+    return jsonOk(res, {
+      clientSecret: out.clientSecret,
+      expiresAt: out.expiresAt,
+      model: 'grok-voice-latest'
+    });
+  } catch (err) {
+    return jsonErr(res, err.message || String(err), 502);
+  }
+});
+
 app.post(
   '/api/voice/transcribe',
   requireEndUserAuth,
@@ -6255,6 +6297,7 @@ if (isMainModule) {
 export {
   app,
   ensureAppReady,
+  mongoToolDefinitions,
   runMongoTool,
   closeMongoClientConnection,
   signAppUserToken,

@@ -6,6 +6,7 @@
     "dev:vercel": "vercel dev",
     "dev:local": "node scripts/dev-local.js",
     "sync:public": "node scripts/sync-public.js",
+    "voice:smoke": "node scripts/xai-voice-smoke-test.js",
     "postinstall": "npm --prefix server install && npm --prefix web-ux install"
   },
   "dependencies": {

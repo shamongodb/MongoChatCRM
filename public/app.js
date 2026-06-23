@@ -6,6 +6,7 @@ import {
   isAuthenticated,
   loadStoredAuthState
 } from './auth.js';
+import { createXaiVoiceClient } from './xai-voice-client.js';
 
 const config = window.__WEB_UX_CONFIG__ || {};
 
@@ -24,13 +25,11 @@ const RESPONSE_MODE_VOICE_WHIMSICAL = 'voice_whimsical';
 const VOICE_STYLE_TAG_PREFIX = /^\s*\[(voice_friendly|voice_conversational|voice_whimsical|whimsical)\]\s*/i;
 const TASK_LIST_FILTERS_STORAGE_KEY = 'webUxTaskListHiddenIds';
 
-let voicePttRecording = false;
 let voiceShortcutHeld = false;
 let voiceMicPointerHeld = false;
 let voiceCancelStart = false;
-let voiceMediaStream = null;
-let voiceMediaRecorder = null;
-let voiceChunks = [];
+let voiceSessionActive = false;
+let xaiVoiceClient = null;
 const CONTACT_DEFAULT_TABLE_COLUMNS = Object.freeze(['name', 'email', 'title']);
 const INITIATIVE_WORKLOAD_PALETTES = Object.freeze([
   { background: '#dbeafe', borderColor: '#60a5fa', color: '#0c4a6e' },
@@ -145,7 +144,7 @@ function isVoiceInputSupported() {
   return (
     typeof navigator !== 'undefined' &&
     !!navigator.mediaDevices?.getUserMedia &&
-    typeof MediaRecorder !== 'undefined'
+    typeof WebSocket !== 'undefined'
   );
 }
 
@@ -154,7 +153,7 @@ function updateVoiceRecordingUi(isRecording) {
   chatInputWrapEl?.classList.toggle('is-recording', isRecording);
   if (chatMicBtnEl) {
     chatMicBtnEl.setAttribute('aria-pressed', isRecording ? 'true' : 'false');
-    chatMicBtnEl.setAttribute('aria-label', isRecording ? 'Recording…' : 'Hold to speak');
+    chatMicBtnEl.setAttribute('aria-label', isRecording ? 'Stop voice' : 'Hold to speak');
   }
   if (chatInputEl) {
     chatInputEl.disabled = isRecording;
@@ -1294,13 +1293,34 @@ async function apiDelete(pathname, options = {}) {
   return data;
 }
 
-function pickRecorderMimeType() {
-  if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return '';
-  const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
-  for (const t of types) {
-    if (MediaRecorder.isTypeSupported(t)) return t;
+function ensureConversationId() {
+  if (!state.currentConversationId) {
+    state.currentConversationId = makeId('conv');
+    localStorage.setItem('webUxConversationId', state.currentConversationId);
   }
-  return '';
+  return state.currentConversationId;
+}
+
+function appendVoiceChatMessage(role, content) {
+  const text = String(content || '').trim();
+  if (!text) return;
+  ensureSignedIn();
+  ensureConversationId();
+  state.chatMessages.push({ role, content: text });
+  renderChatMessages();
+}
+
+function getXaiVoiceClient() {
+  if (xaiVoiceClient) return xaiVoiceClient;
+  xaiVoiceClient = createXaiVoiceClient({
+    apiBaseUrl: state.apiBaseUrl,
+    authHeaders: (extra = {}) => authHeaders(extra),
+    onStatus: (text) => setStatus(text),
+    onUserTranscript: (text) => appendVoiceChatMessage('user', text),
+    onAssistantTranscript: (text) => appendVoiceChatMessage('assistant', text),
+    onError: (message) => setStatus(message || 'Voice error')
+  });
+  return xaiVoiceClient;
 }
 
 function isVoicePushToTalkShortcut(event) {
@@ -1323,161 +1343,44 @@ function isVoiceChordReleaseKey(event) {
   return false;
 }
 
-function stopVoiceMediaStream() {
-  if (!voiceMediaStream) return;
-  voiceMediaStream.getTracks().forEach((t) => t.stop());
-  voiceMediaStream = null;
-}
-
-async function transcribeVoiceBlob(blob) {
-  ensureSignedIn();
-  const fd = new FormData();
-  fd.append('file', blob, 'recording.webm');
-  const url = state.apiBaseUrl ? `${state.apiBaseUrl}/api/voice/transcribe` : '/api/voice/transcribe';
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: fd
-  });
-  const raw = await res.text();
-  let data = {};
-  try {
-    data = raw ? JSON.parse(raw) : {};
-  } catch (_err) {
-    throw new Error('Server returned non-JSON response.');
-  }
-  throwIfApiError(res, data);
-  return String(data.text || '').trim();
-}
-
-async function playAssistantTts(text, options = {}) {
-  ensureSignedIn();
-  const responseMode =
-    typeof options.responseMode === 'string' && options.responseMode.trim()
-      ? options.responseMode.trim()
-      : RESPONSE_MODE_VOICE_CONVERSATIONAL;
-  const rewriteForSpeech = options.rewriteForSpeech !== false;
-  const url = state.apiBaseUrl ? `${state.apiBaseUrl}/api/voice/speak` : '/api/voice/speak';
-  const headers = authHeaders({ 'Content-Type': 'application/json' });
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ text, responseMode, rewriteForSpeech })
-  });
-  if (!res.ok) {
-    const raw = await res.text();
-    let data = {};
-    try {
-      data = raw ? JSON.parse(raw) : {};
-    } catch (_e) {
-      throw new Error(raw || `HTTP ${res.status}`);
-    }
-    throwIfApiError(res, data);
-  }
-  const blob = await res.blob();
-  const objUrl = URL.createObjectURL(blob);
-  const audio = new Audio(objUrl);
-  try {
-    await audio.play();
-    await new Promise((resolve, reject) => {
-      audio.onended = resolve;
-      audio.onerror = () => reject(new Error('Audio playback failed'));
-    });
-  } finally {
-    URL.revokeObjectURL(objUrl);
-  }
-}
-
-async function startVoiceCapture() {
-  if (voicePttRecording) return;
+async function startVoiceSession() {
+  if (voiceSessionActive) return;
   try {
     ensureSignedIn();
   } catch (err) {
     setStatus(err.message || 'Sign in with Google to continue.');
     return;
   }
-  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+  if (!isVoiceInputSupported()) {
     setStatus('Voice input is not supported in this browser.');
     return;
   }
   voiceCancelStart = false;
-  let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (err) {
-    setStatus(`Microphone: ${err.message || 'permission denied'}`);
-    return;
-  }
-  if (voiceCancelStart) {
-    stream.getTracks().forEach((t) => t.stop());
-    return;
-  }
-  voiceMediaStream = stream;
-  voiceChunks = [];
-  const mime = pickRecorderMimeType();
-  try {
-    voiceMediaRecorder = new MediaRecorder(voiceMediaStream, mime ? { mimeType: mime } : undefined);
-  } catch (_err) {
-    stopVoiceMediaStream();
-    voiceMediaRecorder = null;
-    setStatus('Could not start voice recorder.');
-    return;
-  }
-  if (voiceCancelStart) {
-    stopVoiceMediaStream();
-    voiceMediaRecorder = null;
-    return;
-  }
-  voiceMediaRecorder.ondataavailable = (ev) => {
-    if (ev.data && ev.data.size > 0) voiceChunks.push(ev.data);
-  };
-  voiceMediaRecorder.onerror = () => setStatus('Recording error');
-  voiceMediaRecorder.start(200);
-  voicePttRecording = true;
-  updateVoiceRecordingUi(true);
-  setStatus('Listening…');
-}
-
-function stopVoiceCaptureAndSend() {
-  if (!voicePttRecording) return;
-  const rec = voiceMediaRecorder;
-  if (!rec) {
-    voicePttRecording = false;
-    updateVoiceRecordingUi(false);
-    stopVoiceMediaStream();
-    return;
-  }
-  voicePttRecording = false;
-  updateVoiceRecordingUi(false);
-  voiceMediaRecorder = null;
-  rec.onstop = async () => {
-    stopVoiceMediaStream();
-    const blob = new Blob(voiceChunks, { type: rec.mimeType || 'audio/webm' });
-    voiceChunks = [];
-    if (blob.size < 200) {
-      setStatus('');
+    await getXaiVoiceClient().start();
+    if (voiceCancelStart) {
+      await getXaiVoiceClient().stop();
       return;
     }
-    setStatus('Transcribing…');
-    try {
-      const text = await transcribeVoiceBlob(blob);
-      if (!String(text).trim()) {
-        setStatus('No speech detected');
-        return;
-      }
-      state.voiceTurnExpectTts = true;
-      await sendChatMessage(text);
-    } catch (err) {
-      setStatus(err.message || String(err));
-    }
-  };
-  if (rec.state === 'recording') {
-    rec.stop();
-  } else {
-    stopVoiceMediaStream();
-    voiceChunks = [];
-    setStatus('');
+    voiceSessionActive = true;
+    updateVoiceRecordingUi(true);
+  } catch (err) {
+    voiceSessionActive = false;
+    updateVoiceRecordingUi(false);
+    setStatus(err.message || String(err));
   }
+}
+
+async function stopVoiceSession() {
+  if (!voiceSessionActive && (!xaiVoiceClient || !xaiVoiceClient.isActive)) return;
+  voiceSessionActive = false;
+  updateVoiceRecordingUi(false);
+  try {
+    if (xaiVoiceClient) await xaiVoiceClient.stop();
+  } catch (err) {
+    setStatus(err.message || String(err));
+  }
+  setStatus('');
 }
 
 function onVoiceKeyDown(event) {
@@ -1485,20 +1388,20 @@ function onVoiceKeyDown(event) {
   if (event.repeat) return;
   event.preventDefault();
   voiceShortcutHeld = true;
-  startVoiceCapture();
+  startVoiceSession();
 }
 
 function onVoiceKeyUp(event) {
   if (!isVoiceChordReleaseKey(event)) return;
-  const inVoiceSession = voiceShortcutHeld || voicePttRecording;
+  const inVoiceSession = voiceShortcutHeld || voiceSessionActive;
   if (!inVoiceSession) return;
   voiceShortcutHeld = false;
   event.preventDefault();
-  if (!voicePttRecording) {
+  if (!voiceSessionActive) {
     voiceCancelStart = true;
     return;
   }
-  stopVoiceCaptureAndSend();
+  stopVoiceSession();
 }
 
 function onChatMicPointerDown(event) {
@@ -1506,7 +1409,7 @@ function onChatMicPointerDown(event) {
   event.preventDefault();
   chatMicBtnEl?.setPointerCapture?.(event.pointerId);
   voiceMicPointerHeld = true;
-  startVoiceCapture();
+  startVoiceSession();
 }
 
 function onChatMicPointerUp(event) {
@@ -1515,11 +1418,11 @@ function onChatMicPointerUp(event) {
   if (chatMicBtnEl?.hasPointerCapture?.(event.pointerId)) {
     chatMicBtnEl.releasePointerCapture(event.pointerId);
   }
-  if (!voicePttRecording) {
+  if (!voiceSessionActive) {
     voiceCancelStart = true;
     return;
   }
-  stopVoiceCaptureAndSend();
+  stopVoiceSession();
 }
 
 function onChatMicPointerLeave(event) {
@@ -1528,11 +1431,11 @@ function onChatMicPointerLeave(event) {
   if (chatMicBtnEl?.hasPointerCapture?.(event.pointerId)) {
     chatMicBtnEl.releasePointerCapture(event.pointerId);
   }
-  if (!voicePttRecording) {
+  if (!voiceSessionActive) {
     voiceCancelStart = true;
     return;
   }
-  stopVoiceCaptureAndSend();
+  stopVoiceSession();
 }
 
 function setupChatMicBtn() {
@@ -2965,22 +2868,6 @@ async function sendChatMessage(overrideText) {
     }
     await loadChatSessions();
     setStatus('');
-    if (
-      expectVoiceTts &&
-      out &&
-      out.reply != null &&
-      String(out.reply).trim() &&
-      !/^Error:\s/i.test(String(out.reply).trim())
-    ) {
-      try {
-        await playAssistantTts(String(out.reply).trim(), {
-          responseMode: outgoing.responseMode,
-          rewriteForSpeech: true
-        });
-      } catch (playErr) {
-        setStatus(`Voice playback: ${playErr.message || playErr}`);
-      }
-    }
   } catch (err) {
     state.chatMessages.push({ role: 'assistant', content: `Error: ${err.message || String(err)}` });
     renderChatMessages();
@@ -3148,14 +3035,14 @@ if (signOutBtnEl) {
 window.addEventListener('keydown', onVoiceKeyDown, true);
 window.addEventListener('keyup', onVoiceKeyUp, true);
 window.addEventListener('blur', () => {
-  if (!voiceShortcutHeld && !voicePttRecording && !voiceMicPointerHeld) return;
+  if (!voiceShortcutHeld && !voiceSessionActive && !voiceMicPointerHeld) return;
   voiceShortcutHeld = false;
   voiceMicPointerHeld = false;
-  if (!voicePttRecording) {
+  if (!voiceSessionActive) {
     voiceCancelStart = true;
     return;
   }
-  stopVoiceCaptureAndSend();
+  stopVoiceSession();
 });
 
 MOBILE_MQ.addEventListener('change', async () => {
