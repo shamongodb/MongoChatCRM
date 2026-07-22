@@ -43,6 +43,7 @@ export async function ensureMemoryCollections(db, cfg) {
     db.collection(cfg.summariesCollection).createIndex({ updatedAt: -1 }),
     db.collection(cfg.jobsCollection).createIndex({ status: 1, updatedAt: -1 }),
     db.collection(cfg.userProfilesCollection).createIndex({ userId: 1 }, { unique: true }),
+    db.collection(cfg.userProfilesCollection).createIndex({ crmShareAllWith: 1 }),
     db.collection(cfg.userProfilesCollection).createIndex({ updatedAt: -1 })
   ]);
 }

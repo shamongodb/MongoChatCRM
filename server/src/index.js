@@ -62,6 +62,15 @@ import {
 import { buildLlmConfig, createCallModel } from './llm/index.js';
 import { handleMcpHttpRequest } from './mcp/http-handler.js';
 import { mintXaiRealtimeClientSecret, resolveMcpPublicUrl } from './mcp/session-config.js';
+import {
+  addShareUserId,
+  isSelfShare,
+  mapSharedWithUsers,
+  normalizeShareEmail,
+  normalizeShareUserIdList,
+  removeShareUserId,
+  resolveShareTargetUserId
+} from './crm-share.js';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -216,6 +225,7 @@ let googleToolDefsCache = null;
 let googleToolDefsCacheTs = 0;
 let memoryCollectionsReady = false;
 let crmCollectionsReady = false;
+let authCollectionsReady = false;
 
 const llmConfig = buildLlmConfig(process.env);
 const callModel = createCallModel(llmConfig);
@@ -658,6 +668,7 @@ async function upsertGoogleAuthUser(googleClaims) {
   if (!sub) throw new Error('Google token is missing subject');
   const nowIso = new Date().toISOString();
   const userId = buildInternalUserIdFromGoogleSub(sub);
+  await ensureAuthSetup();
   const users = (await getMongoDb()).collection(MONGO_AUTH_USERS_COLLECTION);
   const email = googleClaims?.email ? String(googleClaims.email).trim().toLowerCase() : null;
   const name = googleClaims?.name ? String(googleClaims.name).trim() : null;
@@ -728,6 +739,13 @@ async function ensureMemorySetup() {
   const db = await getMongoDb();
   await ensureMemoryCollections(db, memoryConfig);
   memoryCollectionsReady = true;
+}
+
+async function ensureAuthSetup() {
+  if (authCollectionsReady) return;
+  const db = await getMongoDb();
+  await db.collection(MONGO_AUTH_USERS_COLLECTION).createIndex({ email: 1 });
+  authCollectionsReady = true;
 }
 
 function isAtlasSearchEnabled() {
@@ -1464,6 +1482,19 @@ async function loadUserProfileForUserId(userId) {
 async function triggerSummaryRefresh(conversationId) {
   const db = await getMongoDb();
   return maybeRefreshConversationSummary(db, memoryConfig, conversationId, false);
+}
+
+async function resolveSharedWithRows(db, profile) {
+  const shareUserIds = normalizeShareUserIdList(profile?.crmShareAllWith);
+  if (!shareUserIds.length) return [];
+  await ensureAuthSetup();
+  const authUsers = await db.collection(MONGO_AUTH_USERS_COLLECTION)
+    .find(
+      { userId: { $in: shareUserIds } },
+      { projection: { userId: 1, email: 1, name: 1 } }
+    )
+    .toArray();
+  return mapSharedWithUsers(shareUserIds, authUsers);
 }
 
 async function fetchGoogleToolDefinitions(force = false) {
@@ -5778,6 +5809,98 @@ app.post('/api/chat', requireApiAuth, async (req, res) => {
   }
 });
 
+app.get('/api/crm/share', requireApiAuth, async (req, res) => {
+  try {
+    const userId = resolveEffectiveUserId(req, req.query?.userId);
+    if (!userId) return jsonErr(res, 'userId is required', 400);
+    await ensureMemorySetup();
+    await ensureAuthSetup();
+    const db = await getMongoDb();
+    const profile = await getUserProfile(db, memoryConfig, userId);
+    const sharedWith = await resolveSharedWithRows(db, profile);
+    return jsonOk(res, { userId, sharedWith });
+  } catch (err) {
+    return jsonErr(res, err.message || err.toString(), 500);
+  }
+});
+
+app.post('/api/crm/share', requireApiAuth, async (req, res) => {
+  try {
+    const userId = resolveEffectiveUserId(req, req.body?.userId);
+    if (!userId) return jsonErr(res, 'userId is required', 400);
+    const email = normalizeShareEmail(req.body?.email);
+    if (!email) return jsonErr(res, 'Valid email is required', 400);
+
+    await ensureMemorySetup();
+    await ensureAuthSetup();
+    const db = await getMongoDb();
+    const authUsers = db.collection(MONGO_AUTH_USERS_COLLECTION);
+    const target = await authUsers.findOne(
+      { email },
+      { projection: { userId: 1, email: 1, name: 1 } }
+    );
+    const targetUserId = resolveShareTargetUserId(target);
+    if (!targetUserId) return jsonErr(res, 'No registered user found for that email address', 404);
+    if (isSelfShare(userId, targetUserId)) return jsonErr(res, 'You cannot share CRM access with yourself', 400);
+
+    const currentProfile = await getUserProfile(db, memoryConfig, userId);
+    const { nextShareUserIds, added } = addShareUserId(currentProfile?.crmShareAllWith, targetUserId);
+    const profile = await upsertUserProfile(db, memoryConfig, {
+      userId,
+      patch: { crmShareAllWith: nextShareUserIds },
+      source: 'user_input'
+    });
+    const sharedWith = await resolveSharedWithRows(db, profile);
+    return jsonOk(res, {
+      userId,
+      added,
+      sharedWith,
+      addedUser: mapSharedWithUsers([targetUserId], [target])[0] || { userId: targetUserId, email, name: null }
+    });
+  } catch (err) {
+    return jsonErr(res, err.message || err.toString(), 500);
+  }
+});
+
+app.delete('/api/crm/share', requireApiAuth, async (req, res) => {
+  try {
+    const userId = resolveEffectiveUserId(req, req.body?.userId ?? req.query?.userId);
+    if (!userId) return jsonErr(res, 'userId is required', 400);
+    const requestedUserId = req.body?.targetUserId || req.body?.sharedUserId || req.body?.shareUserId || req.query?.targetUserId;
+    const requestedEmail = req.body?.email ?? req.query?.email;
+
+    await ensureMemorySetup();
+    await ensureAuthSetup();
+    const db = await getMongoDb();
+    const authUsers = db.collection(MONGO_AUTH_USERS_COLLECTION);
+
+    let targetUserId = requestedUserId ? String(requestedUserId).trim() : '';
+    if (!targetUserId && requestedEmail !== undefined) {
+      const email = normalizeShareEmail(requestedEmail);
+      if (!email) return jsonErr(res, 'Valid email is required', 400);
+      const target = await authUsers.findOne({ email }, { projection: { userId: 1 } });
+      targetUserId = resolveShareTargetUserId(target) || '';
+      if (!targetUserId) return jsonErr(res, 'No registered user found for that email address', 404);
+    }
+    if (!targetUserId) {
+      return jsonErr(res, 'target userId or email is required', 400);
+    }
+    if (isSelfShare(userId, targetUserId)) return jsonErr(res, 'You cannot remove your own userId from shares', 400);
+
+    const currentProfile = await getUserProfile(db, memoryConfig, userId);
+    const { nextShareUserIds, removed } = removeShareUserId(currentProfile?.crmShareAllWith, targetUserId);
+    const profile = await upsertUserProfile(db, memoryConfig, {
+      userId,
+      patch: { crmShareAllWith: nextShareUserIds },
+      source: 'user_input'
+    });
+    const sharedWith = await resolveSharedWithRows(db, profile);
+    return jsonOk(res, { userId, removed, sharedWith });
+  } catch (err) {
+    return jsonErr(res, err.message || err.toString(), 500);
+  }
+});
+
 app.get('/api/memory/profile', requireApiAuth, async (req, res) => {
   try {
     const userId = resolveEffectiveUserId(req, req.query?.userId);
@@ -6384,7 +6507,7 @@ let appReadyPromise = null;
 
 async function ensureAppReady() {
   if (!appReadyPromise) {
-    appReadyPromise = Promise.all([ensureMemorySetup(), ensureCrmSetup()]).catch((err) => {
+    appReadyPromise = Promise.all([ensureMemorySetup(), ensureCrmSetup(), ensureAuthSetup()]).catch((err) => {
       appReadyPromise = null;
       throw err;
     });
