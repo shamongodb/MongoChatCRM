@@ -120,12 +120,30 @@
         <div id="authControls" class="auth-controls">
           <div id="authSignedIn" class="auth-signed-in" hidden>
             <span id="authUserEmail" class="auth-user-email"></span>
+            <button id="shareCrmBtn" class="auth-share-btn" type="button">Share CRM</button>
             <button id="signOutBtn" class="auth-signout-btn" type="button">Sign out</button>
           </div>
         </div>
       </header>
       <section id="cardsContainer" class="cards"></section>
     </main>
+  </div>
+
+  <div id="crmShareModal" class="crm-share-modal" hidden>
+    <div id="crmShareBackdrop" class="crm-share-backdrop"></div>
+    <section class="crm-share-panel" role="dialog" aria-modal="true" aria-labelledby="crmShareTitle">
+      <header class="crm-share-header">
+        <h2 id="crmShareTitle">Share CRM Access</h2>
+        <button id="crmShareCloseBtn" class="crm-share-close" type="button" aria-label="Close share dialog">Close</button>
+      </header>
+      <p class="crm-share-note">Grant access to all CRM records you enter now and in the future. This does not share chat history.</p>
+      <form id="crmShareForm" class="crm-share-form">
+        <input id="crmShareEmailInput" type="email" placeholder="teammate@example.com" autocomplete="email" required>
+        <button id="crmShareSubmitBtn" type="submit" class="crm-share-submit">Share</button>
+      </form>
+      <div id="crmShareStatus" class="crm-share-status" aria-live="polite"></div>
+      <div id="crmShareList" class="crm-share-list"></div>
+    </section>
   </div>
 
   <script src="/config.js"></script>

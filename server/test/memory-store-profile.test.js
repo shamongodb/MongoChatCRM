@@ -104,7 +104,8 @@ test('ensureMemoryCollections creates user profile indexes', async () => {
   const db = createFakeDb();
   await ensureMemoryCollections(db, cfg);
   const profileIndexes = db.collection(cfg.userProfilesCollection)._state.indexes;
-  assert.equal(profileIndexes.length, 2);
+  assert.equal(profileIndexes.length, 3);
   assert.deepEqual(profileIndexes[0].index, { userId: 1 });
-  assert.deepEqual(profileIndexes[1].index, { updatedAt: -1 });
+  assert.deepEqual(profileIndexes[1].index, { crmShareAllWith: 1 });
+  assert.deepEqual(profileIndexes[2].index, { updatedAt: -1 });
 });
