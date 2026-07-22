@@ -244,6 +244,7 @@ async function loadCrmShareList() {
 function openCrmShareModal() {
   if (!crmShareModalEl) return;
   crmShareModalEl.hidden = false;
+  crmShareModalEl.removeAttribute('hidden');
   setCrmShareStatus('');
   renderCrmShareList();
   setTimeout(() => crmShareEmailInputEl?.focus(), 0);
@@ -252,8 +253,13 @@ function openCrmShareModal() {
 function closeCrmShareModal() {
   if (!crmShareModalEl) return;
   crmShareModalEl.hidden = true;
+  crmShareModalEl.setAttribute('hidden', '');
   setCrmShareStatus('');
   if (crmShareFormEl) crmShareFormEl.reset();
+}
+
+function isCrmShareModalOpen() {
+  return Boolean(crmShareModalEl && !crmShareModalEl.hidden);
 }
 
 async function openAndLoadCrmShareModal() {
@@ -3209,11 +3215,25 @@ if (shareCrmBtnEl) {
   });
 }
 if (crmShareCloseBtnEl) {
-  crmShareCloseBtnEl.addEventListener('click', () => closeCrmShareModal());
+  crmShareCloseBtnEl.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeCrmShareModal();
+  });
 }
 if (crmShareBackdropEl) {
-  crmShareBackdropEl.addEventListener('click', () => closeCrmShareModal());
+  crmShareBackdropEl.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeCrmShareModal();
+  });
 }
+window.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  if (!isCrmShareModalOpen()) return;
+  event.preventDefault();
+  closeCrmShareModal();
+});
 if (crmShareFormEl) {
   crmShareFormEl.addEventListener('submit', (event) => submitCrmShareEmail(event));
 }
