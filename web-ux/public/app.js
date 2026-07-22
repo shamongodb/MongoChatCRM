@@ -16,7 +16,8 @@ const state = {
   currentConversationId: null,
   chatMessages: [],
   chatSessions: [],
-  voiceTurnExpectTts: false
+  voiceTurnExpectTts: false,
+  crmShareEntries: []
 };
 
 const RESPONSE_MODE_CHAT_DEFAULT = 'chat_default';
@@ -118,7 +119,15 @@ const chatStatusEl = document.getElementById('chatStatus');
 const newChatBtnEl = document.getElementById('newChatBtn');
 const authSignedInEl = document.getElementById('authSignedIn');
 const authUserEmailEl = document.getElementById('authUserEmail');
+const shareCrmBtnEl = document.getElementById('shareCrmBtn');
 const signOutBtnEl = document.getElementById('signOutBtn');
+const crmShareModalEl = document.getElementById('crmShareModal');
+const crmShareBackdropEl = document.getElementById('crmShareBackdrop');
+const crmShareCloseBtnEl = document.getElementById('crmShareCloseBtn');
+const crmShareFormEl = document.getElementById('crmShareForm');
+const crmShareEmailInputEl = document.getElementById('crmShareEmailInput');
+const crmShareStatusEl = document.getElementById('crmShareStatus');
+const crmShareListEl = document.getElementById('crmShareList');
 
 function isMobileLayout() {
   return MOBILE_MQ.matches;
@@ -197,8 +206,96 @@ function updateAuthUi() {
   const authState = getAuthState();
   const signedIn = Boolean(authState.authToken && authState.userId);
   if (authSignedInEl) authSignedInEl.hidden = !signedIn;
+  if (shareCrmBtnEl) shareCrmBtnEl.hidden = !signedIn;
   if (authUserEmailEl) {
     authUserEmailEl.textContent = signedIn ? String(authState.authUser?.email || authState.userId || '') : '';
+  }
+}
+
+function setCrmShareStatus(message, isError = false) {
+  if (!crmShareStatusEl) return;
+  crmShareStatusEl.textContent = message ? String(message) : '';
+  crmShareStatusEl.classList.toggle('crm-share-status--error', !!(message && isError));
+}
+
+function renderCrmShareList() {
+  if (!crmShareListEl) return;
+  const entries = Array.isArray(state.crmShareEntries) ? state.crmShareEntries : [];
+  if (!entries.length) {
+    crmShareListEl.innerHTML = '<p class="crm-share-empty">No one has access yet.</p>';
+    return;
+  }
+  crmShareListEl.innerHTML = entries.map((entry) => {
+    const userId = String(entry?.userId || '').trim();
+    const email = String(entry?.email || '').trim() || 'unknown-email';
+    const name = String(entry?.name || '').trim();
+    const label = name ? `${escapeHtml(name)} <span class="crm-share-email">(${escapeHtml(email)})</span>` : escapeHtml(email);
+    const disabledAttr = userId ? '' : ' disabled';
+    return `<div class="crm-share-row"><div class="crm-share-row-label">${label}</div><button class="crm-share-remove" type="button" data-share-user-id="${escapeHtml(userId)}"${disabledAttr}>Remove</button></div>`;
+  }).join('');
+}
+
+async function loadCrmShareList() {
+  const data = await apiGet('/api/crm/share');
+  state.crmShareEntries = Array.isArray(data.sharedWith) ? data.sharedWith : [];
+  renderCrmShareList();
+}
+
+function openCrmShareModal() {
+  if (!crmShareModalEl) return;
+  crmShareModalEl.hidden = false;
+  setCrmShareStatus('');
+  renderCrmShareList();
+  setTimeout(() => crmShareEmailInputEl?.focus(), 0);
+}
+
+function closeCrmShareModal() {
+  if (!crmShareModalEl) return;
+  crmShareModalEl.hidden = true;
+  setCrmShareStatus('');
+  if (crmShareFormEl) crmShareFormEl.reset();
+}
+
+async function openAndLoadCrmShareModal() {
+  ensureSignedIn();
+  openCrmShareModal();
+  setCrmShareStatus('Loading access list...');
+  try {
+    await loadCrmShareList();
+    setCrmShareStatus('');
+  } catch (err) {
+    setCrmShareStatus(err?.message || String(err), true);
+  }
+}
+
+async function submitCrmShareEmail(event) {
+  event.preventDefault();
+  const email = String(crmShareEmailInputEl?.value || '').trim();
+  if (!email) {
+    setCrmShareStatus('Enter an email address to share with.', true);
+    return;
+  }
+  setCrmShareStatus('Saving access...');
+  try {
+    await apiPost('/api/crm/share', { email });
+    if (crmShareFormEl) crmShareFormEl.reset();
+    await loadCrmShareList();
+    setCrmShareStatus(`Shared CRM access with ${email}.`);
+  } catch (err) {
+    setCrmShareStatus(err?.message || String(err), true);
+  }
+}
+
+async function removeCrmShareByUserId(targetUserId) {
+  const userId = String(targetUserId || '').trim();
+  if (!userId) return;
+  setCrmShareStatus('Updating access...');
+  try {
+    await apiDelete('/api/crm/share', { body: { targetUserId: userId } });
+    await loadCrmShareList();
+    setCrmShareStatus('Access removed.');
+  } catch (err) {
+    setCrmShareStatus(err?.message || String(err), true);
   }
 }
 
@@ -1284,7 +1381,11 @@ async function apiDelete(pathname, options = {}) {
   const headers = options.skipAuth
     ? { 'Content-Type': 'application/json' }
     : authHeaders({ 'Content-Type': 'application/json' });
-  const res = await fetch(url, { method: 'DELETE', headers });
+  const request = { method: 'DELETE', headers };
+  if (options.body !== undefined) {
+    request.body = JSON.stringify(options.body || {});
+  }
+  const res = await fetch(url, request);
   const raw = await res.text();
   let data = {};
   try {
@@ -3102,12 +3203,36 @@ chatInputEl.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') sendChatMessage();
 });
 newChatBtnEl.addEventListener('click', newChat);
+if (shareCrmBtnEl) {
+  shareCrmBtnEl.addEventListener('click', () => {
+    openAndLoadCrmShareModal();
+  });
+}
+if (crmShareCloseBtnEl) {
+  crmShareCloseBtnEl.addEventListener('click', () => closeCrmShareModal());
+}
+if (crmShareBackdropEl) {
+  crmShareBackdropEl.addEventListener('click', () => closeCrmShareModal());
+}
+if (crmShareFormEl) {
+  crmShareFormEl.addEventListener('submit', (event) => submitCrmShareEmail(event));
+}
+if (crmShareListEl) {
+  crmShareListEl.addEventListener('click', (event) => {
+    const button = event.target.closest('.crm-share-remove');
+    if (!button) return;
+    const targetUserId = String(button.getAttribute('data-share-user-id') || '').trim();
+    removeCrmShareByUserId(targetUserId);
+  });
+}
 if (signOutBtnEl) {
   signOutBtnEl.addEventListener('click', () => {
     clearAuthState();
+    closeCrmShareModal();
     state.currentConversationId = null;
     state.chatMessages = [];
     state.chatSessions = [];
+    state.crmShareEntries = [];
     renderChatMessages();
     setChatSessions([]);
     window.location.replace('/login');
