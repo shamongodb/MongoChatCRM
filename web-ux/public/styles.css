@@ -480,6 +480,10 @@ body {
   justify-content: center;
 }
 
+.crm-share-modal[hidden] {
+  display: none !important;
+}
+
 .crm-share-backdrop {
   position: absolute;
   inset: 0;
